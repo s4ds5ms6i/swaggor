@@ -76,11 +76,11 @@ func main() {
 	fillHandlerPath(descriptors, packages)
 	fillReturnsOfEachHandler(descriptors)
 
-	fmt.Println(descriptors[0].TaggedInPath, descriptors[0].tagEnd, descriptors[0].URL, descriptors[0].HandlerFuncName,
-		descriptors[0].Method, descriptors[0].HandlerPath)
-
-	fmt.Println(descriptors[0].Returns[0])
-	fmt.Println("----------------------------------------")
+	// fmt.Println(descriptors[0].TaggedInPath, descriptors[0].tagEnd, descriptors[0].URL, descriptors[0].HandlerFuncName,
+	// 	descriptors[0].Method, descriptors[0].HandlerPath)
+	//
+	// fmt.Println(descriptors[0].Returns[0])
+	// fmt.Println("----------------------------------------")
 
 	for _, desc := range descriptors {
 		for i := 1; i < len(desc.Returns); i++ {
@@ -88,39 +88,8 @@ func main() {
 			if errMsg != "" {
 				fmt.Println("500", errMsg)
 			} else if strings.Contains(desc.Returns[i], ".JSON(") {
-				responseFields := getResponseFields(desc.Returns[0], desc.Returns[i], packages)
+				responseFields := getFieldsFromReturn(desc, desc.Returns[i], packages)
 				fmt.Println(responseFields)
-
-				for _, field := range responseFields {
-					src, err := os.ReadFile(desc.HandlerPath)
-					if err != nil {
-						log.Fatal(err)
-					}
-
-					f, err := getFile(src, 0)
-					if err != nil {
-						log.Fatal(err)
-					}
-
-					ast.Inspect(f, func(n ast.Node) bool {
-						switch x := n.(type) {
-						case *ast.AssignStmt:
-							if x.Pos() >= desc.HandlerFuncPos &&
-								x.End() <= desc.HandlerFuncEnd {
-								for k, lhs := range x.Lhs {
-									start := lhs.Pos() - 1
-									end := lhs.End() - 1
-									if string(src[start:end]) == field.RawVal {
-										start = x.Rhs[k].Pos() - 1
-										end = x.Rhs[k].End() - 1
-										fmt.Println(string(src[start:end]))
-									}
-								}
-							}
-						}
-						return true
-					})
-				}
 			} else if strings.Contains(desc.Returns[i], "(") {
 				tokens := strings.Split(desc.Returns[i], "(")
 				_, b := findDeclPath(packages, tokens[0])
@@ -133,6 +102,7 @@ func main() {
 type Field struct {
 	Name        string
 	Type        string
+	TypeDef     string
 	IsPrimitive bool
 	Attr        string
 	JSONName    string
@@ -140,7 +110,48 @@ type Field struct {
 	Val         string
 }
 
-func getResponseFields(funcBody string, returnStatement string, packages map[string]*ast.Package) []Field {
+func getFieldsFromReturn(desc *Descriptor, returnStatement string, packages map[string]*ast.Package) []Field {
+	responseFields := getResponseFields(returnStatement, packages)
+	for fi, field := range responseFields {
+		src, err := os.ReadFile(desc.HandlerPath)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		f, err := getFile(src, 0)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.AssignStmt:
+				if x.Pos() >= desc.HandlerFuncPos &&
+					x.End() <= desc.HandlerFuncEnd {
+					for li, lhs := range x.Lhs {
+						start := lhs.Pos() - 1
+						end := lhs.End() - 1
+						if string(src[start:end]) == field.RawVal {
+							start = x.Rhs[li].Pos() - 1
+							end = x.Rhs[li].End() - 1
+							rhs := string(src[start:end])
+							if strings.Contains(rhs, "{") {
+								responseFields[fi].Type = strings.TrimLeft(getStringBefore(rhs, "{"), "&")
+								_, structBody := findDeclPath(packages, fmt.Sprintf("type %s struct", responseFields[fi].Type))
+								responseFields[fi].TypeDef = structBody
+							}
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+
+	return responseFields
+}
+
+func getResponseFields(returnStatement string, packages map[string]*ast.Package) []Field {
 	rawResponse := strings.TrimRight(getStringAfter(returnStatement, ","), ")")
 	if strings.Contains(rawResponse, "{") {
 		rawStruct := getStringBefore(rawResponse, "{")
