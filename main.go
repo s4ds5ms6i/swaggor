@@ -18,6 +18,8 @@ type Descriptor struct {
 	TaggedInPath    string
 	HandlerPath     string
 	HandlerFuncName string
+	HandlerFuncPos  token.Pos
+	HandlerFuncEnd  token.Pos
 	tagEnd          token.Pos
 	Method          string
 	URL             string
@@ -86,29 +88,39 @@ func main() {
 			if errMsg != "" {
 				fmt.Println("500", errMsg)
 			} else if strings.Contains(desc.Returns[i], ".JSON(") {
-				fields := getResponseFields(desc.Returns[0], desc.Returns[i], packages)
-				fmt.Println(fields)
+				responseFields := getResponseFields(desc.Returns[0], desc.Returns[i], packages)
+				fmt.Println(responseFields)
 
-				// f, err := getFile(src, 0)
-				// if err != nil {
-				// 	log.Fatal(err)
-				// }
-				// ast.Inspect(f, findAssignment(src, lastFuncDecl, lastSelectorExprStr, descriptors, i))
-
-				src := []byte(desc.Returns[0])
-				f, err := getFile(src, 0)
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				ast.Inspect(f, func(n ast.Node) bool {
-					switch x := n.(type) {
-					case *ast.AssignStmt:
-						fmt.Println("@@@@@@@@@@@@@@@@@", x)
+				for _, field := range responseFields {
+					src, err := os.ReadFile(desc.HandlerPath)
+					if err != nil {
+						log.Fatal(err)
 					}
-					return true
-				})
 
+					f, err := getFile(src, 0)
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					ast.Inspect(f, func(n ast.Node) bool {
+						switch x := n.(type) {
+						case *ast.AssignStmt:
+							if x.Pos() >= desc.HandlerFuncPos &&
+								x.End() <= desc.HandlerFuncEnd {
+								for k, lhs := range x.Lhs {
+									start := lhs.Pos() - 1
+									end := lhs.End() - 1
+									if string(src[start:end]) == field.RawVal {
+										start = x.Rhs[k].Pos() - 1
+										end = x.Rhs[k].End() - 1
+										fmt.Println(string(src[start:end]))
+									}
+								}
+							}
+						}
+						return true
+					})
+				}
 			} else if strings.Contains(desc.Returns[i], "(") {
 				tokens := strings.Split(desc.Returns[i], "(")
 				_, b := findDeclPath(packages, tokens[0])
@@ -235,6 +247,8 @@ func fillReturnsOfEachHandler(descriptors []*Descriptor) {
 					if x.Name.Name == descriptors[i].HandlerFuncName {
 						funcFound = true
 						firstFuncDecl = x
+						desc.HandlerFuncPos = x.Pos()
+						desc.HandlerFuncEnd = x.End()
 					}
 				}
 			}
