@@ -8,8 +8,11 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/ghodss/yaml"
 )
 
 const CommentHeader = "SWAGGOR"
@@ -23,7 +26,14 @@ type Descriptor struct {
 	tagEnd          token.Pos
 	Method          string
 	URL             string
-	Returns         []string
+	RawReturns      []string
+	Returns         []Return
+}
+
+type Return struct {
+	StatusCode string
+	JSON       string
+	Message    string
 }
 
 func main() {
@@ -79,24 +89,166 @@ func main() {
 	// fmt.Println(descriptors[0].TaggedInPath, descriptors[0].tagEnd, descriptors[0].URL, descriptors[0].HandlerFuncName,
 	// 	descriptors[0].Method, descriptors[0].HandlerPath)
 	//
-	// fmt.Println(descriptors[0].Returns[0])
+	// fmt.Println(descriptors[0].RawReturns[0])
 	// fmt.Println("----------------------------------------")
 
+	descIndex := 0
 	for _, desc := range descriptors {
-		for i := 1; i < len(desc.Returns); i++ {
-			errMsg := tryGetErrorMsg(desc.Returns[i])
+		for i := 1; i < len(desc.RawReturns); i++ {
+			errMsg := tryGetErrorMsg(desc.RawReturns[i])
 			if errMsg != "" {
-				fmt.Println("500", errMsg)
-			} else if strings.Contains(desc.Returns[i], ".JSON(") {
-				responseFields := getFieldsFromReturn(desc, desc.Returns[i], packages)
-				fmt.Println(responseFields)
-			} else if strings.Contains(desc.Returns[i], "(") {
-				tokens := strings.Split(desc.Returns[i], "(")
+				descriptors[descIndex].Returns = append(descriptors[descIndex].Returns, Return{StatusCode: "500", Message: errMsg})
+			} else if strings.Contains(desc.RawReturns[i], ".JSON(") {
+				responseFields := getFieldsFromReturn(desc, desc.RawReturns[i], packages)
+				json := "{\n"
+				for _, field := range responseFields {
+					json = fmt.Sprintf("%s%s\"%s\": ", json, indent(2), field.JSONName)
+					if field.IsPrimitive == true {
+						json = fmt.Sprintf("%s%s,\n", json, strings.TrimLeft(field.Type, "*"))
+					} else if strings.Contains(field.TypeDef, "struct") {
+						innerJson := fmt.Sprintf("\n%s{\n", indent(2))
+						structLines := strings.Split(getStringAfter(field.TypeDef, "{"), "\n")
+						for _, sl := range structLines {
+							slTokens := strings.Fields(sl)
+							if len(slTokens) != 3 || !strings.Contains(slTokens[2], "json") {
+								continue
+							}
+
+							if ok, _ := isPrimitiveType(slTokens[1]); ok {
+								innerJson = fmt.Sprintf("%s%s\"%s\": %s,\n",
+									innerJson, indent(4), getStringInBetween(slTokens[2],
+										"`json:\"", "\"`"), strings.TrimLeft(slTokens[1], "*"))
+							}
+						}
+
+						innerJson = fmt.Sprintf("%s%s}\n", innerJson, indent(2))
+						json = fmt.Sprintf("%s%s", json, innerJson)
+					}
+				}
+				json = fmt.Sprintf("%s}", json)
+
+				descriptors[descIndex].Returns = append(descriptors[descIndex].Returns, Return{StatusCode: "200", JSON: json})
+			} else if strings.Contains(desc.RawReturns[i], "(") {
+				tokens := strings.Split(desc.RawReturns[i], "(")
 				_, b := findDeclPath(packages, tokens[0])
-				fmt.Println(getHttpStatusCodeFromReturn(b), tryGetErrorMsg(b))
+				descriptors[descIndex].Returns = append(descriptors[descIndex].Returns,
+					Return{
+						StatusCode: getHttpStatusCodeFromReturn(b),
+						Message:    tryGetErrorMsg(b),
+					})
+			}
+		}
+
+		sort.Slice(descriptors[descIndex].Returns[:], func(i, j int) bool {
+			return descriptors[descIndex].Returns[i].StatusCode < descriptors[descIndex].Returns[j].StatusCode
+		})
+		fmt.Println(descriptors[descIndex].Returns)
+		fmt.Println("============================")
+		descIndex++
+	}
+
+	var swagger string
+	swagger = fmt.Sprintln(
+		`openapi: 3.0.0
+info:
+  title: Title of the service
+  description: |
+    Service description.
+  version: '0.0.0'
+paths:`)
+	for _, desc := range descriptors {
+		var distinctReturns []Return
+		for _, ret := range desc.Returns {
+			found := false
+			for i, distRet := range distinctReturns {
+				if distRet.StatusCode == ret.StatusCode {
+					found = true
+					distinctReturns[i].Message = fmt.Sprintf("%s / %s", distinctReturns[i].Message, ret.Message)
+					break
+				}
+			}
+
+			if found == false {
+				distinctReturns = append(distinctReturns, ret)
+			}
+		}
+
+		swagger = fmt.Sprintf("%s%s'%s':\n", swagger, indent(2), desc.URL)
+		swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(4), strings.ToLower(desc.Method))
+		swagger = fmt.Sprintf("%s%ssummary: %s\n", swagger, indent(6), "Some description")
+		swagger = fmt.Sprintf("%s%sdescription: %s\n", swagger, indent(6), "Some description")
+		swagger = fmt.Sprintf("%s%sresponses:\n", swagger, indent(6))
+
+		for _, ret := range distinctReturns {
+			swagger = fmt.Sprintf("%s%s'%s':\n", swagger, indent(8), ret.StatusCode)
+			if len(ret.Message) > 0 {
+				swagger = fmt.Sprintf("%s%sdescription: %s\n", swagger, indent(10), ret.Message)
+			} else {
+				swagger = fmt.Sprintf("%s%sdescription: %s\n", swagger, indent(10), "no description")
+			}
+
+			swagger = fmt.Sprintf("%s%scontent:\n", swagger, indent(10))
+			swagger = fmt.Sprintf("%s%sapplication/json:\n", swagger, indent(12))
+			swagger = fmt.Sprintf("%s%sschema:\n", swagger, indent(14))
+			swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(16))
+			swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(16))
+
+			if ret.StatusCode == "200" {
+				j := []byte(ret.JSON)
+				y, err := yaml.JSONToYAML(j)
+				if err != nil {
+					swagger = fmt.Sprintf("%s%serror in converting json to yaml\n", swagger, indent(22))
+					continue
+				}
+
+				yamlLines := strings.Split(string(y), "\n")
+				for _, yamlLine := range yamlLines {
+					yamlLineTokens := strings.Split(yamlLine, ":")
+					if (len(yamlLineTokens) == 1 && strings.Trim(yamlLineTokens[0], " ") != "") ||
+						(len(yamlLineTokens) == 2 && strings.Trim(yamlLineTokens[1], " ") == "") {
+						swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(18), yamlLineTokens[0])
+						swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(20))
+						swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(20))
+					} else if len(yamlLineTokens) == 2 {
+						var ind uint
+						if strings.HasPrefix(yamlLineTokens[0], "  ") {
+							ind = 2
+						}
+
+						swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(18+ind), yamlLineTokens[0])
+						swagger = fmt.Sprintf("%s%stype: %s\n",
+							swagger, indent(20+ind+uint(strings.Count(yamlLineTokens[0], " "))),
+							goTypeToSwagger(strings.TrimLeft(yamlLineTokens[1], " ")))
+					}
+				}
+			} else {
+				swagger = fmt.Sprintf("%s%sError:\n", swagger, indent(18))
+				swagger = fmt.Sprintf("%s%srequired:\n", swagger, indent(20))
+				swagger = fmt.Sprintf("%s%s- message\n", swagger, indent(22))
+				swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(20))
+				swagger = fmt.Sprintf("%s%smessage:\n", swagger, indent(22))
+				swagger = fmt.Sprintf("%s%stype: string\n", swagger, indent(24))
 			}
 		}
 	}
+
+	fmt.Println(swagger)
+}
+
+func indent(count uint) string {
+	if count == 0 {
+		return ""
+	} else {
+		return fmt.Sprintf("%s ", indent(count-1))
+	}
+}
+
+func indentN(count uint) string {
+	return fmt.Sprintf("%s\n", indent(count))
+}
+
+func nIndent(count uint) string {
+	return fmt.Sprintf("\n%s", indent(count))
 }
 
 type Field struct {
@@ -171,10 +323,11 @@ func getResponseFields(returnStatement string, packages map[string]*ast.Package)
 				for _, rl := range responseLines {
 					rlTokens := strings.Fields(rl)
 					if len(rlTokens) > 0 && rlTokens[0] == fmt.Sprintf("%s:", slTokens[0]) {
+						primitiveType, _ := isPrimitiveType(slTokens[1])
 						r = &Field{
 							Name:        slTokens[0],
 							Type:        slTokens[1],
-							IsPrimitive: isPrimitiveType(slTokens[1]),
+							IsPrimitive: primitiveType,
 							Attr:        slTokens[2],
 							JSONName:    getStringInBetween(slTokens[2], "json:\"", "\""),
 							RawVal:      rlTokens[1]}
@@ -182,10 +335,11 @@ func getResponseFields(returnStatement string, packages map[string]*ast.Package)
 				}
 
 				if r == nil {
+					primitiveType, _ := isPrimitiveType(slTokens[1])
 					r = &Field{
 						Name:        slTokens[0],
 						Type:        slTokens[1],
-						IsPrimitive: isPrimitiveType(slTokens[1]),
+						IsPrimitive: primitiveType,
 						Attr:        slTokens[2],
 						JSONName:    getStringInBetween(slTokens[2], "json:\"", "\""),
 						RawVal:      strings.Fields(responseLines[j-1])[0],
@@ -200,8 +354,6 @@ func getResponseFields(returnStatement string, packages map[string]*ast.Package)
 					} else {
 						r.Val = r.RawVal
 					}
-				} else {
-
 				}
 
 				processedResponse = append(processedResponse, *r)
@@ -214,12 +366,13 @@ func getResponseFields(returnStatement string, packages map[string]*ast.Package)
 }
 
 func tryGetErrorMsg(src string) string {
+	msg := ""
 	if strings.Contains(src, `fmt.Errorf("`) {
-		return getStringInBetween(src, `fmt.Errorf("`, `"`)
+		msg = getStringInBetween(src, `fmt.Errorf("`, `"`)
 	} else if strings.Contains(src, `errors.New("`) {
-		return getStringInBetween(src, `errors.New("`, `"`)
+		msg = getStringInBetween(src, `errors.New("`, `"`)
 	}
-	return ""
+	return strings.Replace(msg, ":", "&#58;", -1)
 }
 
 func getHttpStatusCodeFromReturn(returnValue string) string {
@@ -277,7 +430,7 @@ func fillReturnsOfEachHandler(descriptors []*Descriptor) {
 				if x.Pos() > firstFuncDecl.Pos() && x.End() < firstFuncDecl.End() {
 					start := x.Results[0].Pos() - 1
 					end := x.Results[0].End() - 1
-					desc.Returns = append(desc.Returns, string(handlerSrc[start:end]))
+					desc.RawReturns = append(desc.RawReturns, string(handlerSrc[start:end]))
 				}
 			}
 			return true
@@ -441,47 +594,91 @@ func getStringAfter(value string, a string) string {
 	return value[pos+1:]
 }
 
-func isPrimitiveType(t string) bool {
-	types := map[string]struct{}{
-		"complex64":   {},
-		"complex128":  {},
-		"float32":     {},
-		"float64":     {},
-		"uint":        {},
-		"uint8":       {},
-		"uint16":      {},
-		"uint32":      {},
-		"uint64":      {},
-		"int":         {},
-		"int8":        {},
-		"int16":       {},
-		"int32":       {},
-		"int64":       {},
-		"uintptr":     {},
-		"error":       {},
-		"bool":        {},
-		"string":      {},
-		"*complex64":  {},
-		"*complex128": {},
-		"*float32":    {},
-		"*float64":    {},
-		"*uint":       {},
-		"*uint8":      {},
-		"*uint16":     {},
-		"*uint32":     {},
-		"*uint64":     {},
-		"*int":        {},
-		"*int8":       {},
-		"*int16":      {},
-		"*int32":      {},
-		"*int64":      {},
-		"*uintptr":    {},
-		"*error":      {},
-		"*bool":       {},
-		"*string":     {},
+func isPrimitiveType(t string) (bool, string) {
+	types := map[string]string{
+		"complex64":   "(0+0i)",
+		"complex128":  "(0+0i)",
+		"float32":     "0.0",
+		"float64":     "0.0",
+		"uint":        "0",
+		"uint8":       "0",
+		"uint16":      "0",
+		"uint32":      "0",
+		"uint64":      "0",
+		"int":         "0",
+		"int8":        "0",
+		"int16":       "0",
+		"int32":       "0",
+		"int64":       "0",
+		"uintptr":     "0",
+		"error":       "nil",
+		"bool":        "true",
+		"string":      "\"string\"",
+		"*complex64":  "(0+0i)",
+		"*complex128": "(0+0i)",
+		"*float32":    "0.0",
+		"*float64":    "0.0",
+		"*uint":       "0",
+		"*uint8":      "0",
+		"*uint16":     "0",
+		"*uint32":     "0",
+		"*uint64":     "0",
+		"*int":        "0",
+		"*int8":       "0",
+		"*int16":      "0",
+		"*int32":      "0",
+		"*int64":      "0",
+		"*uintptr":    "0",
+		"*error":      "nil",
+		"*bool":       "true",
+		"*string":     "\"string\"",
 	}
-	_, ok := types[t]
-	return ok
+	defaultValue, ok := types[t]
+	return ok, defaultValue
+}
+
+func goTypeToSwagger(t string) string {
+	switch t {
+	case "complex64",
+		"complex128",
+		"float32",
+		"float64",
+		"uint",
+		"uint8",
+		"uint16",
+		"uint32",
+		"uint64",
+		"int",
+		"int8",
+		"int16",
+		"int32",
+		"int64",
+		"uintptr",
+		"*complex64",
+		"*complex128",
+		"*float32",
+		"*float64",
+		"*uint",
+		"*uint8",
+		"*uint16",
+		"*uint32",
+		"*uint64",
+		"*int",
+		"*int8",
+		"*int16",
+		"*int32",
+		"*int64",
+		"*uintptr":
+		return "number"
+	case "bool",
+		"*bool":
+		return "boolean"
+	case "string",
+		"*string":
+		return "string"
+	default:
+		return ""
+	}
 }
 
 func findAssignment(src []byte,
