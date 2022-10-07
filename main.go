@@ -113,11 +113,23 @@ func main() {
 							if len(slTokens) != 3 || !strings.Contains(slTokens[2], "json") {
 								continue
 							}
-
 							if ok, _ := isPrimitiveType(slTokens[1]); ok {
 								innerJson = fmt.Sprintf("%s%s\"%s\": %s,\n",
 									innerJson, indent(4), getStringInBetween(slTokens[2],
 										"`json:\"", "\"`"), strings.TrimLeft(slTokens[1], "*"))
+							} else if strings.HasPrefix(slTokens[1], "map[") {
+								mapTypes := strings.Split(getStringAfter(slTokens[1], "["), "]")
+								if len(mapTypes) != 2 {
+									continue
+								}
+
+								innerJson = fmt.Sprintf("%s%s\"%s\": {\n",
+									innerJson, indent(4), getStringInBetween(slTokens[2],
+										"`json:\"", "\"`"))
+								innerJson = fmt.Sprintf("%s%s\"%s\": \"%s\"\n",
+									innerJson, indent(6), mapTypes[0], mapTypes[1])
+								innerJson = fmt.Sprintf("%s%s},\n",
+									innerJson, indent(4))
 							}
 						}
 
@@ -125,6 +137,7 @@ func main() {
 						json = fmt.Sprintf("%s%s", json, innerJson)
 					}
 				}
+
 				json = fmt.Sprintf("%s}", json)
 
 				descriptors[descIndex].Returns = append(descriptors[descIndex].Returns, Return{StatusCode: "200", JSON: json})
@@ -201,6 +214,9 @@ paths:`)
 					continue
 				}
 
+				fmt.Println(string(y))
+				fmt.Println("============================")
+
 				yamlLines := strings.Split(string(y), "\n")
 				for _, yamlLine := range yamlLines {
 					yamlLineTokens := strings.Split(yamlLine, ":")
@@ -215,10 +231,20 @@ paths:`)
 							ind = 2
 						}
 
-						swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(18+ind), yamlLineTokens[0])
-						swagger = fmt.Sprintf("%s%stype: %s\n",
-							swagger, indent(20+ind+uint(strings.Count(yamlLineTokens[0], " "))),
-							goTypeToSwagger(strings.TrimLeft(yamlLineTokens[1], " ")))
+						if ok, _ := isPrimitiveType(strings.TrimLeft(yamlLineTokens[0], " ")); ok {
+							swagger = strings.TrimSuffix(swagger, "properties:\n")
+							swagger = strings.TrimRight(swagger, " ")
+							swagger = strings.TrimSuffix(swagger, "type: object\n")
+							swagger = strings.TrimRight(swagger, " ")
+							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind+20))
+							swagger = fmt.Sprintf("%s%sadditionalProperties:\n", swagger, indent(ind+20))
+							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind+22))
+						} else {
+							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(18), yamlLineTokens[0])
+							swagger = fmt.Sprintf("%s%stype: %s\n",
+								swagger, indent(20+ind),
+								goTypeToSwagger(strings.TrimLeft(yamlLineTokens[1], " ")))
+						}
 					}
 				}
 			} else {
@@ -633,6 +659,7 @@ func isPrimitiveType(t string) (bool, string) {
 		"*bool":       "true",
 		"*string":     "\"string\"",
 	}
+
 	defaultValue, ok := types[t]
 	return ok, defaultValue
 }
