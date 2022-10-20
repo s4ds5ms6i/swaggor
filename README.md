@@ -13,13 +13,13 @@ The idea is to add a comment like **"//SWAGGOR"** above the echo endpoint defini
 ## Usage
 Usage supposed to be like this:
 ```go
-	groupV2 := v2.Group("/group", 
+groupV2 := v2.Group("/group", 
 		tracing.MiddlewareWrapper("SomeMiddleware", 
-			middleware.SomeMiddleware(middleware.RestrictPassengerAuthMode)))
+		middleware.SomeMiddleware(middleware.RestrictPassengerAuthMode)))
 	
-	// SWAGGOR
-        groupV2.GET("/something", tracing.HandlerWrapper("EndpointHandler",
+// SWAGGOR
+groupV2.GET("/something", tracing.HandlerWrapper("EndpointHandler",
 		controller.EndpointHandler(dbRepo, msgRepo)),
 		tracing.MiddlewareWrapper("SomeMiddleware", 
-			middleware.SomeMiddleware(middleware.SomeEnum)))
+		middleware.SomeMiddleware(middleware.SomeEnum)))
 ```
