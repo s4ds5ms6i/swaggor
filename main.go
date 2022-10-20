@@ -155,8 +155,8 @@ func main() {
 		sort.Slice(descriptors[descIndex].Returns[:], func(i, j int) bool {
 			return descriptors[descIndex].Returns[i].StatusCode < descriptors[descIndex].Returns[j].StatusCode
 		})
-		fmt.Println(descriptors[descIndex].Returns)
-		fmt.Println("============================")
+		// fmt.Println(descriptors[descIndex].Returns)
+		// fmt.Println("============================")
 		descIndex++
 	}
 
@@ -214,23 +214,26 @@ paths:`)
 					continue
 				}
 
-				fmt.Println(string(y))
-				fmt.Println("============================")
+				// fmt.Println(string(y))
+				// fmt.Println("============================")
 
 				yamlLines := strings.Split(string(y), "\n")
-				for _, yamlLine := range yamlLines {
+				for ln, yamlLine := range yamlLines {
 					yamlLineTokens := strings.Split(yamlLine, ":")
-					if (len(yamlLineTokens) == 1 && strings.Trim(yamlLineTokens[0], " ") != "") ||
-						(len(yamlLineTokens) == 2 && strings.Trim(yamlLineTokens[1], " ") == "") {
-						swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(18), yamlLineTokens[0])
+					if (len(yamlLineTokens) == 1 && !isEmptyOrWhitespace(yamlLineTokens[0])) ||
+						(len(yamlLineTokens) == 2 && isEmptyOrWhitespace(yamlLineTokens[1])) {
+						var extInd uint = 0
+						if len(yamlLines) > ln {
+							nextYAMLLineTokens := strings.Split(yamlLines[ln+1], ":")
+							if ok, _ := isPrimitiveType(strings.TrimLeft(nextYAMLLineTokens[0], " ")); ok {
+								extInd = 2
+							}
+						}
+						swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(extInd+18), yamlLineTokens[0])
 						swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(20))
 						swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(20))
 					} else if len(yamlLineTokens) == 2 {
-						var ind uint
-						if strings.HasPrefix(yamlLineTokens[0], "  ") {
-							ind = 2
-						}
-
+						ind := countLeadingSpaces(yamlLineTokens[0])
 						if ok, _ := isPrimitiveType(strings.TrimLeft(yamlLineTokens[0], " ")); ok {
 							swagger = strings.TrimSuffix(swagger, "properties:\n")
 							swagger = strings.TrimRight(swagger, " ")
@@ -240,9 +243,9 @@ paths:`)
 							swagger = fmt.Sprintf("%s%sadditionalProperties:\n", swagger, indent(ind+20))
 							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind+22))
 						} else {
-							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(18), yamlLineTokens[0])
+							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(ind+18), yamlLineTokens[0])
 							swagger = fmt.Sprintf("%s%stype: %s\n",
-								swagger, indent(20+ind),
+								swagger, indent(ind+22),
 								goTypeToSwagger(strings.TrimLeft(yamlLineTokens[1], " ")))
 						}
 					}
@@ -618,6 +621,14 @@ func getStringAfter(value string, a string) string {
 		return ""
 	}
 	return value[pos+1:]
+}
+
+func countLeadingSpaces(str string) uint {
+	return uint(len(str) - len(strings.TrimLeft(str, " ")))
+}
+
+func isEmptyOrWhitespace(str string) bool {
+	return len(str) == 0 || strings.Trim(str, " ") == ""
 }
 
 func isPrimitiveType(t string) (bool, string) {
