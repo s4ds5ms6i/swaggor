@@ -15,7 +15,7 @@ Usage supposed to be like this:
 ```go
 groupV2 := v2.Group("/group", 
 		tracing.MiddlewareWrapper("SomeMiddleware", 
-		middleware.SomeMiddleware(middleware.RestrictPassengerAuthMode)))
+		middleware.SomeMiddleware(middleware.SomeEnum)))
 	
 // SWAGGOR
 groupV2.GET("/something", tracing.HandlerWrapper("EndpointHandler",
