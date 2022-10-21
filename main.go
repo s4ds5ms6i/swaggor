@@ -105,7 +105,7 @@ func main() {
 					json = fmt.Sprintf("%s%s\"%s\": ", json, indent(2), field.JSONName)
 					if field.IsPrimitive == true {
 						json = fmt.Sprintf("%s%s,\n", json, strings.TrimLeft(field.Type, "*"))
-					} else if strings.Contains(field.TypeDef, "struct") {
+					} else if strings.Contains(field.TypeDef, " struct {") {
 						innerJson := fmt.Sprintf("\n%s{\n", indent(2))
 						structLines := strings.Split(getStringAfter(field.TypeDef, "{"), "\n")
 						for _, sl := range structLines {
@@ -130,11 +130,23 @@ func main() {
 									innerJson, indent(6), mapTypes[0], mapTypes[1])
 								innerJson = fmt.Sprintf("%s%s},\n",
 									innerJson, indent(4))
+							} else if strings.HasPrefix(slTokens[1], "[") { // array or slice
+								t := getStringAfter(slTokens[1], "]")
+								if len(t) == 0 {
+									continue
+								}
+
+								innerJson = fmt.Sprintf("%s%s\"%s\": [\n%s{\n",
+									innerJson, indent(4), getStringInBetween(slTokens[2],
+										"`json:\"", "\"`"), indent(6))
+								innerJson = fmt.Sprintf("%s%s}\n%s],\n",
+									innerJson, indent(6), indent(4))
 							}
 						}
 
 						innerJson = fmt.Sprintf("%s%s}\n", innerJson, indent(2))
 						json = fmt.Sprintf("%s%s", json, innerJson)
+						fmt.Println("--->", json)
 					}
 				}
 
@@ -155,8 +167,8 @@ func main() {
 		sort.Slice(descriptors[descIndex].Returns[:], func(i, j int) bool {
 			return descriptors[descIndex].Returns[i].StatusCode < descriptors[descIndex].Returns[j].StatusCode
 		})
-		// fmt.Println(descriptors[descIndex].Returns)
-		// fmt.Println("============================")
+		fmt.Println(descriptors[descIndex].Returns)
+		fmt.Println("============================")
 		descIndex++
 	}
 
@@ -176,7 +188,9 @@ paths:`)
 			for i, distRet := range distinctReturns {
 				if distRet.StatusCode == ret.StatusCode {
 					found = true
-					distinctReturns[i].Message = fmt.Sprintf("%s / %s", distinctReturns[i].Message, ret.Message)
+					if !isEmptyOrWhitespace(ret.Message) {
+						distinctReturns[i].Message = fmt.Sprintf("%s / %s", distinctReturns[i].Message, ret.Message)
+					}
 					break
 				}
 			}
@@ -214,8 +228,8 @@ paths:`)
 					continue
 				}
 
-				// fmt.Println(string(y))
-				// fmt.Println("============================")
+				fmt.Println(string(y))
+				fmt.Println("============================")
 
 				yamlLines := strings.Split(string(y), "\n")
 				for ln, yamlLine := range yamlLines {
@@ -259,6 +273,8 @@ paths:`)
 				swagger = fmt.Sprintf("%s%stype: string\n", swagger, indent(24))
 			}
 		}
+		fmt.Println("============================")
+		fmt.Println("============================")
 	}
 
 	fmt.Println(swagger)
@@ -325,8 +341,14 @@ func getFieldsFromReturn(desc *Descriptor, returnStatement string, packages map[
 					}
 				}
 			}
+
 			return true
 		})
+		if ok, _ := isPrimitiveType(responseFields[fi].Type); len(responseFields[fi].TypeDef) == 0 && !ok {
+			responseFields[fi].Type = field.RawVal
+			_, structBody := findDeclPath(packages, fmt.Sprintf("type %s struct", responseFields[fi].Type))
+			responseFields[fi].TypeDef = structBody
+		}
 	}
 
 	return responseFields
@@ -359,7 +381,7 @@ func getResponseFields(returnStatement string, packages map[string]*ast.Package)
 							IsPrimitive: primitiveType,
 							Attr:        slTokens[2],
 							JSONName:    getStringInBetween(slTokens[2], "json:\"", "\""),
-							RawVal:      rlTokens[1]}
+							RawVal:      strings.TrimRight(rlTokens[1], "{")}
 					}
 				}
 
