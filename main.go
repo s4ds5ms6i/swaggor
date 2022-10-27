@@ -188,7 +188,6 @@ paths:`)
 
 				yamlLines := strings.Split(string(y), "\n")
 				var arrInd uint
-				var extArrInd uint
 				for ln, yamlLine := range yamlLines {
 					yamlLineTokens := strings.Split(yamlLine, ":")
 					if (len(yamlLineTokens) == 1 && !isEmptyOrWhitespace(yamlLineTokens[0])) ||
@@ -217,12 +216,10 @@ paths:`)
 						}
 
 						ind := countLeadingSpaces(yamlLineTokens[0])
-						if countLeadingSpaces(yamlLineTokens[0]) == arrInd {
+						if ind > 0 && ind == arrInd {
 							ind += 2
-							extArrInd = 2
 						} else {
 							arrInd = 0
-							extArrInd = 0
 						}
 
 						if ok, _ := isPrimitiveType(strings.TrimLeft(yamlLineTokens[0], " ")); ok {
@@ -234,9 +231,10 @@ paths:`)
 							swagger = fmt.Sprintf("%s%sadditionalProperties:\n", swagger, indent(ind+20))
 							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind+22))
 						} else {
-							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(ind+18), yamlLineTokens[0])
+							exp := indent(ind+18) + yamlLineTokens[0]
+							swagger = fmt.Sprintf("%s%s:\n", swagger, exp)
 							swagger = fmt.Sprintf("%s%stype: %s\n",
-								swagger, indent(ind+extArrInd+22),
+								swagger, indent(countLeadingSpaces(exp)+2),
 								goTypeToSwagger(strings.TrimLeft(yamlLineTokens[1], " ")))
 						}
 					}
