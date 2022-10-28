@@ -122,8 +122,8 @@ func main() {
 		sort.Slice(descriptors[descIndex].Returns[:], func(i, j int) bool {
 			return descriptors[descIndex].Returns[i].StatusCode < descriptors[descIndex].Returns[j].StatusCode
 		})
-		fmt.Println(descriptors[descIndex].Returns)
-		fmt.Println("============================")
+		// fmt.Println(descriptors[descIndex].Returns)
+		// fmt.Println("============================")
 		descIndex++
 	}
 
@@ -159,8 +159,18 @@ paths:`)
 		swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(4), strings.ToLower(desc.Method))
 		swagger = fmt.Sprintf("%s%ssummary: %s\n", swagger, indent(6), "Some description")
 		swagger = fmt.Sprintf("%s%sdescription: %s\n", swagger, indent(6), "Some description")
-		swagger = fmt.Sprintf("%s%sresponses:\n", swagger, indent(6))
+		queryParams := getQueryParams(desc, packages)
+		if len(queryParams) > 0 {
+			swagger = fmt.Sprintf("%s%sparameters:\n", swagger, indent(6))
+			swagger = fmt.Sprintf("%s%s- in: query\n", swagger, indent(8))
+			for p, t := range queryParams {
+				swagger = fmt.Sprintf("%s%sname: %s\n", swagger, indent(10), p)
+				swagger = fmt.Sprintf("%s%sschema: \n", swagger, indent(10))
+				swagger = fmt.Sprintf("%s%stype: %s\n", swagger, indent(12), t)
+			}
+		}
 
+		swagger = fmt.Sprintf("%s%sresponses:\n", swagger, indent(6))
 		for _, ret := range distinctReturns {
 			swagger = fmt.Sprintf("%s%s'%s':\n", swagger, indent(8), ret.StatusCode)
 			if len(ret.Message) > 0 {
@@ -183,8 +193,8 @@ paths:`)
 					continue
 				}
 
-				fmt.Println(string(y))
-				fmt.Println("============================")
+				// fmt.Println(string(y))
+				// fmt.Println("============================")
 
 				yamlLines := strings.Split(string(y), "\n")
 				var arrInd uint
@@ -248,8 +258,8 @@ paths:`)
 				swagger = fmt.Sprintf("%s%stype: string\n", swagger, indent(24))
 			}
 		}
-		fmt.Println("============================")
-		fmt.Println("============================")
+		// fmt.Println("============================")
+		// fmt.Println("============================")
 	}
 
 	fmt.Println(swagger)
@@ -389,6 +399,53 @@ func getResponseFields(returnStatement string, packages map[string]*ast.Package)
 		}
 	}
 	return nil
+}
+
+func getQueryParams(desc *Descriptor, packages map[string]*ast.Package) map[string]string {
+	src, err := os.ReadFile(desc.HandlerPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	f, err := getFile(src, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	result := make(map[string]string)
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			if x.Pos() >= desc.HandlerFuncPos &&
+				x.End() <= desc.HandlerFuncEnd {
+				start := x.Pos() - 1
+				end := x.End() - 1
+				if strings.Contains(string(src[start:end]), "QueryParam") {
+					rawQueryParam := getStringInBetween(string(src[start:end]), "QueryParam(", ")")
+					if strings.HasPrefix(rawQueryParam, `"`) && strings.HasSuffix(rawQueryParam, `"`) {
+						result[getStringInBetween(rawQueryParam, `"`, `"`)] = "string"
+					} else {
+						_, decl := findDeclPath(packages, rawQueryParam)
+						if strings.HasPrefix(decl, "const (") { // TODO: extend for other declaration types
+							declLines := strings.Split(strings.Trim(getStringInBetween(decl, "const (", ")"), "\n"), "\n")
+							for _, dl := range declLines {
+								tokens := strings.Split(dl, "=")
+								if !strings.Contains(tokens[0], rawQueryParam) {
+									continue
+								}
+
+								result[getStringInBetween(strings.Trim(tokens[1], " "), `"`, `"`)] = "string"
+							}
+						}
+					}
+				}
+			}
+		}
+
+		return true
+	})
+
+	return result
 }
 
 func tryGetErrorMsg(src string) string {
@@ -579,7 +636,7 @@ func getJSONBody(packages map[string]*ast.Package, field Field, isArray bool) st
 			innerJson = fmt.Sprintf("%s%s]\n", innerJson, indent(extInd))
 		}
 		json = fmt.Sprintf("%s%s", json, innerJson)
-		fmt.Println("--->", json)
+		// fmt.Println("--->", json)
 	}
 
 	return json
