@@ -162,9 +162,23 @@ paths:`)
 		queryParams := getQueryParams(desc, packages)
 		if len(queryParams) > 0 {
 			swagger = fmt.Sprintf("%s%sparameters:\n", swagger, indent(6))
-			swagger = fmt.Sprintf("%s%s- in: query\n", swagger, indent(8))
 			for p, t := range queryParams {
+				swagger = fmt.Sprintf("%s%s- in: query\n", swagger, indent(8))
 				swagger = fmt.Sprintf("%s%sname: %s\n", swagger, indent(10), p)
+				swagger = fmt.Sprintf("%s%sschema: \n", swagger, indent(10))
+				swagger = fmt.Sprintf("%s%stype: %s\n", swagger, indent(12), t)
+			}
+		}
+
+		reqHeaders := getRequestHeaders(desc, packages)
+		if len(reqHeaders) > 0 {
+			if len(queryParams) == 0 {
+				swagger = fmt.Sprintf("%s%sparameters:\n", swagger, indent(6))
+			}
+
+			for h, t := range reqHeaders {
+				swagger = fmt.Sprintf("%s%s- in: header\n", swagger, indent(8))
+				swagger = fmt.Sprintf("%s%sname: %s\n", swagger, indent(10), h)
 				swagger = fmt.Sprintf("%s%sschema: \n", swagger, indent(10))
 				swagger = fmt.Sprintf("%s%stype: %s\n", swagger, indent(12), t)
 			}
@@ -401,7 +415,22 @@ func getResponseFields(returnStatement string, packages map[string]*ast.Package)
 	return nil
 }
 
+type requestInputType string
+
+const (
+	ReqInpQueryParam = "QueryParam"
+	ReqInpHeader     = "Request().Header.Get"
+)
+
 func getQueryParams(desc *Descriptor, packages map[string]*ast.Package) map[string]string {
+	return getRequestInputs(desc, packages, ReqInpQueryParam)
+}
+
+func getRequestHeaders(desc *Descriptor, packages map[string]*ast.Package) map[string]string {
+	return getRequestInputs(desc, packages, ReqInpHeader)
+}
+
+func getRequestInputs(desc *Descriptor, packages map[string]*ast.Package, inputType requestInputType) map[string]string {
 	src, err := os.ReadFile(desc.HandlerPath)
 	if err != nil {
 		log.Fatal(err)
@@ -420,11 +449,16 @@ func getQueryParams(desc *Descriptor, packages map[string]*ast.Package) map[stri
 				x.End() <= desc.HandlerFuncEnd {
 				start := x.Pos() - 1
 				end := x.End() - 1
-				if strings.Contains(string(src[start:end]), "QueryParam") {
-					rawQueryParam := getStringInBetween(string(src[start:end]), "QueryParam(", ")")
+				if strings.Contains(string(src[start:end]), string(inputType)) {
+					rawQueryParam := getStringInBetween(string(src[start:end]), string(inputType)+"(", ")")
 					if strings.HasPrefix(rawQueryParam, `"`) && strings.HasSuffix(rawQueryParam, `"`) {
 						result[getStringInBetween(rawQueryParam, `"`, `"`)] = "string"
 					} else {
+						if strings.Contains(rawQueryParam, ".") {
+							tokens := strings.Split(rawQueryParam, ".")
+							rawQueryParam = tokens[len(tokens)-1]
+						}
+
 						_, decl := findDeclPath(packages, rawQueryParam)
 						if strings.HasPrefix(decl, "const (") { // TODO: extend for other declaration types
 							declLines := strings.Split(strings.Trim(getStringInBetween(decl, "const (", ")"), "\n"), "\n")
