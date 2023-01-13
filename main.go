@@ -102,7 +102,7 @@ func main() {
 				responseFields := getFieldsFromReturn(desc, desc.RawReturns[i], packages)
 				json := "{\n"
 				for _, field := range responseFields {
-					json = json + getJSONBody(packages, field, false)
+					json = json + getJSONBody(packages, field, field.IsArray)
 				}
 
 				json = fmt.Sprintf("%s}", json)
@@ -184,6 +184,21 @@ paths:`)
 			}
 		}
 
+		reqInputsFromContext := getFromContext(desc, packages)
+		if len(reqInputsFromContext) > 0 {
+			if len(queryParams) == 0 && len(reqHeaders) == 0 {
+				swagger = fmt.Sprintf("%s%sparameters:\n", swagger, indent(6))
+			}
+
+			for h, t := range reqInputsFromContext {
+				swagger = fmt.Sprintf("%s%s- in: header\n", swagger, indent(8))
+				swagger = fmt.Sprintf("%s%sname: %s\n", swagger, indent(10), h)
+				swagger = fmt.Sprintf("%s%sdescription: API expects %s to be included in {UNKNOWN} header fields\n", swagger, indent(10), h)
+				swagger = fmt.Sprintf("%s%sschema: \n", swagger, indent(10))
+				swagger = fmt.Sprintf("%s%stype: %s\n", swagger, indent(12), t)
+			}
+		}
+
 		swagger = fmt.Sprintf("%s%sresponses:\n", swagger, indent(6))
 		for _, ret := range distinctReturns {
 			swagger = fmt.Sprintf("%s%s'%s':\n", swagger, indent(8), ret.StatusCode)
@@ -225,9 +240,9 @@ paths:`)
 						}
 
 						if len(yamlLines) > ln && strings.Contains(yamlLines[ln+1], "- ") { // array
-							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(extInd+20), yamlLineTokens[0])
+							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(extInd+18), yamlLineTokens[0])
 							swagger = fmt.Sprintf("%s%stype: array\n%sitems:\n%stype: object\n%sproperties:\n",
-								swagger, indent(24), indent(24), indent(26), indent(26))
+								swagger, indent(20), indent(20), indent(22), indent(22))
 						} else {
 							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(extInd+18), yamlLineTokens[0])
 							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(20))
@@ -235,8 +250,8 @@ paths:`)
 						}
 					} else if len(yamlLineTokens) == 2 {
 						if strings.Contains(yamlLineTokens[0], "- ") { // array
-							arrInd = countLeadingSpaces(yamlLineTokens[0]) + 2
 							yamlLineTokens[0] = strings.Replace(yamlLineTokens[0], "- ", "  ", 1)
+							arrInd = countLeadingSpaces(yamlLineTokens[0])
 						}
 
 						ind := countLeadingSpaces(yamlLineTokens[0])
@@ -300,6 +315,7 @@ type Field struct {
 	Type        string
 	TypeDef     string
 	IsPrimitive bool
+	IsArray     bool
 	Attr        string
 	JSONName    string
 	RawVal      string
@@ -332,9 +348,17 @@ func getFieldsFromReturn(desc *Descriptor, returnStatement string, packages map[
 							end = x.Rhs[li].End() - 1
 							rhs := string(src[start:end])
 							if strings.Contains(rhs, "{") {
-								responseFields[fi].Type = strings.TrimLeft(getStringBefore(rhs, "{"), "&")
-								_, structBody := findDeclPath(packages, fmt.Sprintf("type %s struct", responseFields[fi].Type))
-								responseFields[fi].TypeDef = structBody
+								if strings.HasPrefix(field.Type, "[") {
+									responseFields[fi].IsArray = true
+									responseFields[fi].Type = getStringAfter(field.Type, "]")
+									_, structBody := findDeclPath(packages, fmt.Sprintf("type %s struct", responseFields[fi].Type))
+									responseFields[fi].TypeDef = structBody
+								} else {
+									// TODO: Add something similar to above (array) for Map
+									responseFields[fi].Type = strings.TrimLeft(getStringBefore(rhs, "{"), "&")
+									_, structBody := findDeclPath(packages, fmt.Sprintf("type %s struct", responseFields[fi].Type))
+									responseFields[fi].TypeDef = structBody
+								}
 							}
 						}
 					}
@@ -354,37 +378,27 @@ func getFieldsFromReturn(desc *Descriptor, returnStatement string, packages map[
 }
 
 func getResponseFields(returnStatement string, packages map[string]*ast.Package) []Field {
-	rawResponse := strings.TrimRight(getStringAfter(returnStatement, ","), ")")
+	rawResponse := strings.Trim(strings.TrimRight(getStringAfter(returnStatement, ","), ")"), " ")
 	if strings.Contains(rawResponse, "{") {
-		rawStruct := getStringBefore(rawResponse, "{")
-		if strings.Contains(rawStruct, ".") {
-			s := getStringAfter(rawStruct, ".")
-			_, b := findDeclPath(packages, fmt.Sprintf("type %s struct", s))
-			structLines := strings.Split(b, "\n")
-			responseLines := strings.Split(strings.TrimRight(getStringAfter(rawResponse, "{"), "}"), ",")
-			var processedResponse []Field
-			for j, sl := range structLines {
-				slTokens := strings.Fields(sl)
-				if len(slTokens) != 3 || !strings.Contains(slTokens[2], "json") {
-					continue
-				}
+		structName := getStringBefore(rawResponse, "{")
+		if strings.Contains(structName, ".") {
+			structName = getStringAfter(structName, ".")
+		}
 
-				var r *Field
-				for _, rl := range responseLines {
-					rlTokens := strings.Fields(rl)
-					if len(rlTokens) > 0 && rlTokens[0] == fmt.Sprintf("%s:", slTokens[0]) {
-						primitiveType, _ := isPrimitiveType(slTokens[1])
-						r = &Field{
-							Name:        slTokens[0],
-							Type:        slTokens[1],
-							IsPrimitive: primitiveType,
-							Attr:        slTokens[2],
-							JSONName:    getStringInBetween(slTokens[2], "json:\"", "\""),
-							RawVal:      strings.TrimRight(rlTokens[1], "{")}
-					}
-				}
+		_, b := findDeclPath(packages, fmt.Sprintf("type %s struct", structName))
+		structLines := strings.Split(b, "\n")
+		responseLines := strings.Split(strings.TrimRight(getStringAfter(rawResponse, "{"), "}"), ",")
+		var processedResponse []Field
+		for j, sl := range structLines {
+			slTokens := strings.Fields(sl)
+			if len(slTokens) != 3 || !strings.Contains(slTokens[2], "json") {
+				continue
+			}
 
-				if r == nil {
+			var r *Field
+			for _, rl := range responseLines {
+				rlTokens := strings.Fields(rl)
+				if len(rlTokens) > 0 && rlTokens[0] == fmt.Sprintf("%s:", slTokens[0]) {
 					primitiveType, _ := isPrimitiveType(slTokens[1])
 					r = &Field{
 						Name:        slTokens[0],
@@ -392,25 +406,36 @@ func getResponseFields(returnStatement string, packages map[string]*ast.Package)
 						IsPrimitive: primitiveType,
 						Attr:        slTokens[2],
 						JSONName:    getStringInBetween(slTokens[2], "json:\"", "\""),
-						RawVal:      strings.Fields(responseLines[j-1])[0],
-					}
+						RawVal:      strings.TrimRight(rlTokens[1], "{")}
 				}
-
-				if r.IsPrimitive {
-					if strings.Contains(r.RawVal, "http.") {
-						if v, ok := httpStatusCodes[strings.TrimLeft(r.RawVal, "http.")]; ok {
-							r.Val = strconv.Itoa(v)
-						}
-					} else {
-						r.Val = r.RawVal
-					}
-				}
-
-				processedResponse = append(processedResponse, *r)
 			}
 
-			return processedResponse
+			if r == nil {
+				primitiveType, _ := isPrimitiveType(slTokens[1])
+				r = &Field{
+					Name:        slTokens[0],
+					Type:        slTokens[1],
+					IsPrimitive: primitiveType,
+					Attr:        slTokens[2],
+					JSONName:    getStringInBetween(slTokens[2], "json:\"", "\""),
+					RawVal:      strings.Fields(responseLines[j-1])[0],
+				}
+			}
+
+			if r.IsPrimitive {
+				if strings.Contains(r.RawVal, "http.") {
+					if v, ok := httpStatusCodes[strings.TrimLeft(r.RawVal, "http.")]; ok {
+						r.Val = strconv.Itoa(v)
+					}
+				} else {
+					r.Val = r.RawVal
+				}
+			}
+
+			processedResponse = append(processedResponse, *r)
 		}
+
+		return processedResponse
 	}
 	return nil
 }
@@ -420,6 +445,7 @@ type requestInputType string
 const (
 	ReqInpQueryParam = "QueryParam"
 	ReqInpHeader     = "Request().Header.Get"
+	EchoContextGet   = "*.Get"
 )
 
 func getQueryParams(desc *Descriptor, packages map[string]*ast.Package) map[string]string {
@@ -428,6 +454,10 @@ func getQueryParams(desc *Descriptor, packages map[string]*ast.Package) map[stri
 
 func getRequestHeaders(desc *Descriptor, packages map[string]*ast.Package) map[string]string {
 	return getRequestInputs(desc, packages, ReqInpHeader)
+}
+
+func getFromContext(desc *Descriptor, packages map[string]*ast.Package) map[string]string {
+	return getRequestInputs(desc, packages, EchoContextGet)
 }
 
 func getRequestInputs(desc *Descriptor, packages map[string]*ast.Package, inputType requestInputType) map[string]string {
@@ -441,16 +471,35 @@ func getRequestInputs(desc *Descriptor, packages map[string]*ast.Package, inputT
 		log.Fatal(err)
 	}
 
+	ctxArgName := ""
 	result := make(map[string]string)
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
+		case *ast.FuncDecl:
+			if x.Pos() >= desc.HandlerFuncPos &&
+				x.End() <= desc.HandlerFuncEnd {
+				start := x.Pos() - 1
+				end := x.End() - 1
+				funcLines := strings.Split(strings.Trim(string(src[start:end]), "\n"), "\n")
+				for _, fl := range funcLines {
+					fl = strings.Trim(fl, " ")
+					if strings.Contains(fl, "return func(") && strings.HasSuffix(fl, "echo.Context) error {") {
+						ctxArgName = strings.Trim(getStringInBetween(fl, "return func(", "echo.Context) error {"), " ")
+					}
+				}
+			}
 		case *ast.CallExpr:
 			if x.Pos() >= desc.HandlerFuncPos &&
 				x.End() <= desc.HandlerFuncEnd {
 				start := x.Pos() - 1
 				end := x.End() - 1
-				if strings.Contains(string(src[start:end]), string(inputType)) {
-					rawQueryParam := getStringInBetween(string(src[start:end]), string(inputType)+"(", ")")
+				inputTypeStr := string(inputType)
+				if strings.Contains(inputTypeStr, "*") {
+					inputTypeStr = strings.Replace(inputTypeStr, "*", ctxArgName, 1)
+				}
+
+				if strings.Contains(string(src[start:end]), inputTypeStr) {
+					rawQueryParam := getStringInBetween(string(src[start:end]), inputTypeStr+"(", ")")
 					if strings.HasPrefix(rawQueryParam, `"`) && strings.HasSuffix(rawQueryParam, `"`) {
 						result[getStringInBetween(rawQueryParam, `"`, `"`)] = "string"
 					} else {
@@ -628,6 +677,7 @@ func getJSONBody(packages map[string]*ast.Package, field Field, isArray bool) st
 			if len(slTokens) != 3 || !strings.Contains(slTokens[2], "json") {
 				continue
 			}
+
 			if ok, _ := isPrimitiveType(slTokens[1]); ok {
 				innerJson = fmt.Sprintf("%s%s\"%s\": %s,\n",
 					innerJson, indent(extInd+4), getStringInBetween(slTokens[2],
@@ -665,9 +715,9 @@ func getJSONBody(packages map[string]*ast.Package, field Field, isArray bool) st
 			}
 		}
 
-		innerJson = fmt.Sprintf("%s%s}\n", innerJson, indent(extInd+2))
+		innerJson = fmt.Sprintf("%s%s},\n", innerJson, indent(extInd+2))
 		if isArray {
-			innerJson = fmt.Sprintf("%s%s]\n", innerJson, indent(extInd))
+			innerJson = fmt.Sprintf("%s%s],\n", innerJson, indent(extInd))
 		}
 		json = fmt.Sprintf("%s%s", json, innerJson)
 		// fmt.Println("--->", json)
