@@ -18,12 +18,19 @@ import (
 const CommentHeader = "SWAGGOR"
 
 type Descriptor struct {
-	TaggedInPath    string
+	TaggedInPath     string
+	TagEnd           token.Pos
+	Handler          Handler
+	middlewaresStart token.Pos
+	Middlewares      []Middleware
+	Headers          []Header
+}
+
+type Handler struct {
 	HandlerPath     string
 	HandlerFuncName string
 	HandlerFuncPos  token.Pos
 	HandlerFuncEnd  token.Pos
-	tagEnd          token.Pos
 	Method          string
 	URL             string
 	RawReturns      []string
@@ -34,6 +41,16 @@ type Return struct {
 	StatusCode string
 	JSON       string
 	Message    string
+}
+
+type Middleware struct {
+	Name string
+	Path string
+}
+
+type Header struct {
+	Decl  string
+	Value string
 }
 
 func main() {
@@ -82,24 +99,29 @@ func main() {
 		return
 	}
 
-	fillInfoFromServeFile(descriptors)
+	fillHandler(descriptors)
+	fillMiddlewares(descriptors)
 	fillHandlerPath(descriptors, packages)
+	fillMiddlewaresPath(descriptors, packages)
 	fillReturnsOfEachHandler(descriptors)
+	fillHeadersOfMiddleware(descriptors, packages)
 
-	// fmt.Println(descriptors[0].TaggedInPath, descriptors[0].tagEnd, descriptors[0].URL, descriptors[0].HandlerFuncName,
-	// 	descriptors[0].Method, descriptors[0].HandlerPath)
+	// fmt.Println(descriptors[0].TaggedInPath, descriptors[0].tagEnd, descriptors[0].URL, descriptors[0].Handler.HandlerFuncName,
+	// 	descriptors[0].Handler.Method, descriptors[0].Handler.HandlerPath)
 	//
-	// fmt.Println(descriptors[0].RawReturns[0])
+	// fmt.Println(descriptors[0].Handler.RawReturns[0])
 	// fmt.Println("----------------------------------------")
 
 	descIndex := 0
 	for _, desc := range descriptors {
-		for i := 1; i < len(desc.RawReturns); i++ {
-			errMsg := tryGetErrorMsg(desc.RawReturns[i])
+		fmt.Println("~~~~~~>", desc.Headers)
+
+		for i := 1; i < len(desc.Handler.RawReturns); i++ {
+			errMsg := tryGetErrorMsg(desc.Handler.RawReturns[i])
 			if errMsg != "" {
-				descriptors[descIndex].Returns = append(descriptors[descIndex].Returns, Return{StatusCode: "500", Message: errMsg})
-			} else if strings.Contains(desc.RawReturns[i], ".JSON(") {
-				responseFields := getFieldsFromReturn(desc, desc.RawReturns[i], packages)
+				descriptors[descIndex].Handler.Returns = append(descriptors[descIndex].Handler.Returns, Return{StatusCode: "500", Message: errMsg})
+			} else if strings.Contains(desc.Handler.RawReturns[i], ".JSON(") {
+				responseFields := getFieldsFromReturn(desc, desc.Handler.RawReturns[i], packages)
 				json := "{\n"
 				for _, field := range responseFields {
 					json = json + getJSONBody(packages, field, field.IsArray)
@@ -107,11 +129,11 @@ func main() {
 
 				json = fmt.Sprintf("%s}", json)
 
-				descriptors[descIndex].Returns = append(descriptors[descIndex].Returns, Return{StatusCode: "200", JSON: json})
-			} else if strings.Contains(desc.RawReturns[i], "(") {
-				tokens := strings.Split(desc.RawReturns[i], "(")
+				descriptors[descIndex].Handler.Returns = append(descriptors[descIndex].Handler.Returns, Return{StatusCode: "200", JSON: json})
+			} else if strings.Contains(desc.Handler.RawReturns[i], "(") {
+				tokens := strings.Split(desc.Handler.RawReturns[i], "(")
 				_, b := findDeclPath(packages, tokens[0])
-				descriptors[descIndex].Returns = append(descriptors[descIndex].Returns,
+				descriptors[descIndex].Handler.Returns = append(descriptors[descIndex].Handler.Returns,
 					Return{
 						StatusCode: getHttpStatusCodeFromReturn(b),
 						Message:    tryGetErrorMsg(b),
@@ -119,10 +141,10 @@ func main() {
 			}
 		}
 
-		sort.Slice(descriptors[descIndex].Returns[:], func(i, j int) bool {
-			return descriptors[descIndex].Returns[i].StatusCode < descriptors[descIndex].Returns[j].StatusCode
+		sort.Slice(descriptors[descIndex].Handler.Returns[:], func(i, j int) bool {
+			return descriptors[descIndex].Handler.Returns[i].StatusCode < descriptors[descIndex].Handler.Returns[j].StatusCode
 		})
-		// fmt.Println(descriptors[descIndex].Returns)
+		// fmt.Println(descriptors[descIndex].Handler.Returns)
 		// fmt.Println("============================")
 		descIndex++
 	}
@@ -138,7 +160,7 @@ info:
 paths:`)
 	for _, desc := range descriptors {
 		var distinctReturns []Return
-		for _, ret := range desc.Returns {
+		for _, ret := range desc.Handler.Returns {
 			found := false
 			for i, distRet := range distinctReturns {
 				if distRet.StatusCode == ret.StatusCode {
@@ -155,8 +177,8 @@ paths:`)
 			}
 		}
 
-		swagger = fmt.Sprintf("%s%s'%s':\n", swagger, indent(2), desc.URL)
-		swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(4), strings.ToLower(desc.Method))
+		swagger = fmt.Sprintf("%s%s'%s':\n", swagger, indent(2), desc.Handler.URL)
+		swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(4), strings.ToLower(desc.Handler.Method))
 		swagger = fmt.Sprintf("%s%ssummary: %s\n", swagger, indent(6), "Some description")
 		swagger = fmt.Sprintf("%s%sdescription: %s\n", swagger, indent(6), "Some description")
 		queryParams := getQueryParams(desc, packages)
@@ -325,7 +347,7 @@ type Field struct {
 func getFieldsFromReturn(desc *Descriptor, returnStatement string, packages map[string]*ast.Package) []Field {
 	responseFields := getResponseFields(returnStatement, packages)
 	for fi, field := range responseFields {
-		src, err := os.ReadFile(desc.HandlerPath)
+		src, err := os.ReadFile(desc.Handler.HandlerPath)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -338,8 +360,8 @@ func getFieldsFromReturn(desc *Descriptor, returnStatement string, packages map[
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch x := n.(type) {
 			case *ast.AssignStmt:
-				if x.Pos() >= desc.HandlerFuncPos &&
-					x.End() <= desc.HandlerFuncEnd {
+				if x.Pos() >= desc.Handler.HandlerFuncPos &&
+					x.End() <= desc.Handler.HandlerFuncEnd {
 					for li, lhs := range x.Lhs {
 						start := lhs.Pos() - 1
 						end := lhs.End() - 1
@@ -461,7 +483,7 @@ func getFromContext(desc *Descriptor, packages map[string]*ast.Package) map[stri
 }
 
 func getRequestInputs(desc *Descriptor, packages map[string]*ast.Package, inputType requestInputType) map[string]string {
-	src, err := os.ReadFile(desc.HandlerPath)
+	src, err := os.ReadFile(desc.Handler.HandlerPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -476,8 +498,8 @@ func getRequestInputs(desc *Descriptor, packages map[string]*ast.Package, inputT
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.FuncDecl:
-			if x.Pos() >= desc.HandlerFuncPos &&
-				x.End() <= desc.HandlerFuncEnd {
+			if x.Pos() >= desc.Handler.HandlerFuncPos &&
+				x.End() <= desc.Handler.HandlerFuncEnd {
 				start := x.Pos() - 1
 				end := x.End() - 1
 				funcLines := strings.Split(strings.Trim(string(src[start:end]), "\n"), "\n")
@@ -489,8 +511,8 @@ func getRequestInputs(desc *Descriptor, packages map[string]*ast.Package, inputT
 				}
 			}
 		case *ast.CallExpr:
-			if x.Pos() >= desc.HandlerFuncPos &&
-				x.End() <= desc.HandlerFuncEnd {
+			if x.Pos() >= desc.Handler.HandlerFuncPos &&
+				x.End() <= desc.Handler.HandlerFuncEnd {
 				start := x.Pos() - 1
 				end := x.End() - 1
 				inputTypeStr := string(inputType)
@@ -558,7 +580,7 @@ func getHttpStatusCodeFromReturn(returnValue string) string {
 
 func fillReturnsOfEachHandler(descriptors []*Descriptor) {
 	for i, desc := range descriptors {
-		handlerSrc, err := os.ReadFile(descriptors[i].HandlerPath)
+		handlerSrc, err := os.ReadFile(descriptors[i].Handler.HandlerPath)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -574,11 +596,11 @@ func fillReturnsOfEachHandler(descriptors []*Descriptor) {
 			switch x := n.(type) {
 			case *ast.FuncDecl:
 				if !funcFound {
-					if x.Name.Name == descriptors[i].HandlerFuncName {
+					if x.Name.Name == descriptors[i].Handler.HandlerFuncName {
 						funcFound = true
 						firstFuncDecl = x
-						desc.HandlerFuncPos = x.Pos()
-						desc.HandlerFuncEnd = x.End()
+						desc.Handler.HandlerFuncPos = x.Pos()
+						desc.Handler.HandlerFuncEnd = x.End()
 					}
 				}
 			}
@@ -596,7 +618,7 @@ func fillReturnsOfEachHandler(descriptors []*Descriptor) {
 				if x.Pos() > firstFuncDecl.Pos() && x.End() < firstFuncDecl.End() {
 					start := x.Results[0].Pos() - 1
 					end := x.Results[0].End() - 1
-					desc.RawReturns = append(desc.RawReturns, string(handlerSrc[start:end]))
+					desc.Handler.RawReturns = append(desc.Handler.RawReturns, string(handlerSrc[start:end]))
 				}
 			}
 			return true
@@ -604,13 +626,84 @@ func fillReturnsOfEachHandler(descriptors []*Descriptor) {
 	}
 }
 
-func fillHandlerPath(descriptors []*Descriptor, packages map[string]*ast.Package) {
-	for _, desc := range descriptors {
-		desc.HandlerPath, _ = findDeclPath(packages, desc.HandlerFuncName)
+func fillHeadersOfMiddleware(descriptors []*Descriptor, packages map[string]*ast.Package) {
+	for i, _ := range descriptors {
+		for _, middleware := range descriptors[i].Middlewares {
+			middlewareSrc, err := os.ReadFile(middleware.Path)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			f, err := getFile(middlewareSrc, 0)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			var firstFuncDecl *ast.FuncDecl
+			var funcFound bool
+			var middlewareFuncPos, middlewareFuncEnd token.Pos
+			ast.Inspect(f, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.FuncDecl:
+					if !funcFound {
+						if x.Name.Name == middleware.Name {
+							funcFound = true
+							firstFuncDecl = x
+							middlewareFuncPos = x.Pos()
+							middlewareFuncEnd = x.End()
+						}
+					}
+				}
+				return true
+			})
+
+			f, err = getFile(middlewareSrc, 0)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			// var rawReturns []string
+			ast.Inspect(f, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.ReturnStmt:
+					if len(x.Results) >= 1 && x.Pos() > firstFuncDecl.Pos() && x.End() < firstFuncDecl.End() {
+						start := x.Results[0].Pos() - 1
+						end := x.Results[0].End() - 1
+						retStr := string(middlewareSrc[start:end])
+						if strings.HasPrefix(retStr, "func(ctx echo.Context) error") {
+							funcLines := strings.Split(retStr, "\n")
+							for _, l := range funcLines {
+								if strings.Contains(l, "Header.Get(") {
+									headerDecl := getStringInBetween(l, "Header.Get(", ")")
+									headerDecl = getStringAfter(headerDecl, ".")
+									_, headerVal := findDeclPath(packages, headerDecl)
+									descriptors[i].Headers = append(descriptors[i].Headers, Header{Decl: headerDecl, Value: headerVal})
+								}
+							}
+						}
+					}
+				}
+				return true
+			})
+		}
 	}
 }
 
-func findDeclPath(packages map[string]*ast.Package, funcName string) (string, string) {
+func fillHandlerPath(descriptors []*Descriptor, packages map[string]*ast.Package) {
+	for _, desc := range descriptors {
+		desc.Handler.HandlerPath, _ = findDeclPath(packages, desc.Handler.HandlerFuncName)
+	}
+}
+
+func fillMiddlewaresPath(descriptors []*Descriptor, packages map[string]*ast.Package) {
+	for i, desc := range descriptors {
+		for j, middleware := range desc.Middlewares {
+			descriptors[i].Middlewares[j].Path, _ = findDeclPath(packages, middleware.Name)
+		}
+	}
+}
+
+func findDeclPath(packages map[string]*ast.Package, name string) (string, string) {
 	for _, pkg := range packages {
 		for path, file := range pkg.Files {
 			if file.Decls == nil || len(file.Decls) == 0 {
@@ -627,28 +720,36 @@ func findDeclPath(packages map[string]*ast.Package, funcName string) (string, st
 				log.Fatal(err)
 			}
 
-			var genDeclBody string
+			var declBody string
 			ast.Inspect(f, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.GenDecl:
 					start := x.Pos() - 1
 					end := x.End() - 1
 					b := string(src[start:end])
-					if genDeclBody == "" && strings.Contains(b, funcName) {
-						genDeclBody = b
+					if declBody == "" && strings.Contains(b, fmt.Sprintf(" %s(", name)) {
+						declBody = b
+						return true
+					}
+				case *ast.ValueSpec:
+					start := x.Pos() - 1
+					end := x.End() - 1
+					b := string(src[start:end])
+					if declBody == "" && strings.Contains(b, fmt.Sprintf("%s = ", name)) {
+						declBody = strings.Trim(strings.Replace(b, fmt.Sprintf("%s = ", name), " ", -1), " ")
 						return true
 					}
 				}
 				return true
 			})
-			if len(genDeclBody) > 0 {
-				return path, genDeclBody
+			if len(declBody) > 0 {
+				return path, declBody
 			}
 
 			for _, d := range file.Decls {
 				switch x := d.(type) {
 				case *ast.FuncDecl:
-					if funcName == x.Name.String() {
+					if name == x.Name.String() {
 						return path, ""
 					}
 				}
@@ -944,8 +1045,8 @@ func findAssignment(src []byte,
 				end = x.Rhs[0].End() - 1
 				assignmentRight := string(src[start:end])
 
-				descriptors[i].URL = fmt.Sprintf("%s%s",
-					getStringInBetween(assignmentRight, "\"", "\""), descriptors[i].URL)
+				descriptors[i].Handler.URL = fmt.Sprintf("%s%s",
+					getStringInBetween(assignmentRight, "\"", "\""), descriptors[i].Handler.URL)
 
 				if strings.Contains(assignmentRight, ".Group(") {
 					f, err := getFile(src, 0)
@@ -977,7 +1078,7 @@ func findTags(path string) (descriptors []*Descriptor) {
 		if strings.HasPrefix(c.Text(), CommentHeader) {
 			descriptors = append(descriptors,
 				&Descriptor{
-					tagEnd:       c.End(),
+					TagEnd:       c.End(),
 					TaggedInPath: path,
 				})
 		}
@@ -990,50 +1091,13 @@ func findTags(path string) (descriptors []*Descriptor) {
 	}
 }
 
-func fillInfoFromServeFile(descriptors []*Descriptor) {
-	for i, desc := range descriptors {
-		src, err := os.ReadFile(desc.TaggedInPath)
-		if err != nil {
-			log.Fatal(err)
-		}
-
+func fillHandler(descriptors []*Descriptor) {
+	for i := range descriptors {
+		src, lastCallExpr, lastFuncDecl, lastSelectorExprStr := inspect(descriptors, i, descriptors[i].TagEnd, false)
 		f, err := getFile(src, 0)
 		if err != nil {
 			log.Fatal(err)
 		}
-
-		var lastSelectorExpr *ast.SelectorExpr
-		var lastCallExpr *ast.CallExpr
-		var lastFuncDecl *ast.FuncDecl
-		var callerFound, selectorFound bool
-		var lastSelectorExprStr string
-		ast.Inspect(f, func(n ast.Node) bool {
-			switch x := n.(type) {
-			case *ast.FuncDecl:
-				if !callerFound {
-					lastFuncDecl = x
-				}
-			case *ast.SelectorExpr:
-				if x.Pos() > desc.tagEnd && !callerFound {
-					callerFound = true
-					lastSelectorExpr = x
-
-					start := lastSelectorExpr.X.Pos() - 1
-					end := lastSelectorExpr.X.End() - 1
-					lastSelectorExprStr = string(src[start:end])
-
-					start = lastSelectorExpr.Sel.Pos() - 1
-					end = lastSelectorExpr.Sel.End() - 1
-					descriptors[i].Method = string(src[start:end])
-				}
-			case *ast.CallExpr:
-				if x.Pos() > desc.tagEnd && !selectorFound {
-					selectorFound = true
-					lastCallExpr = x
-				}
-			}
-			return true
-		})
 
 		f, err = getFile(src, 0)
 		if err != nil {
@@ -1049,9 +1113,9 @@ func fillInfoFromServeFile(descriptors []*Descriptor) {
 						argFound = true
 						switch j {
 						case 0:
-							descriptors[i].URL = getStringInBetween(x.Value, "\"", "\"")
+							descriptors[i].Handler.URL = getStringInBetween(x.Value, "\"", "\"")
 						case 1:
-							descriptors[i].HandlerFuncName = getStringInBetween(x.Value, "\"", "\"")
+							descriptors[i].Handler.HandlerFuncName = getStringInBetween(x.Value, "\"", "\"")
 						}
 					}
 				}
@@ -1064,6 +1128,86 @@ func fillInfoFromServeFile(descriptors []*Descriptor) {
 			log.Fatal(err)
 		}
 
-		ast.Inspect(f, findAssignment(src, lastFuncDecl, lastSelectorExprStr, descriptors, i))
+		ast.Inspect(f, findAssignment(src, &lastFuncDecl, lastSelectorExprStr, descriptors, i))
 	}
+}
+
+func fillMiddlewares(descriptors []*Descriptor) {
+	for i := range descriptors {
+		src, lastCallExpr, lastFuncDecl, lastSelectorExprStr := inspect(descriptors, i, descriptors[i].middlewaresStart, true)
+		f, err := getFile(src, 0)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		for j, arg := range lastCallExpr.Args {
+			var argFound bool
+			ast.Inspect(f, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.BasicLit:
+					if x.Pos() >= arg.Pos() && !argFound {
+						argFound = true
+						if j == 1 {
+							descriptors[i].Middlewares = append(descriptors[i].Middlewares, Middleware{Name: getStringInBetween(x.Value, "\"", "\"")})
+						}
+					}
+				}
+				return true
+			})
+		}
+
+		f, err = getFile(src, 0)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		ast.Inspect(f, findAssignment(src, &lastFuncDecl, lastSelectorExprStr, descriptors, i))
+	}
+}
+
+func inspect(descriptors []*Descriptor, descIndex int, pos token.Pos, isMiddleware bool) (src []byte, lastCallExpr ast.CallExpr, lastFuncDecl ast.FuncDecl, lastSelectorExprStr string) {
+	var err error
+	src, err = os.ReadFile(descriptors[descIndex].TaggedInPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	f, err := getFile(src, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var lastSelectorExpr *ast.SelectorExpr
+	var callerFound, selectorFound bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			if !callerFound {
+				lastFuncDecl = *x
+			}
+		case *ast.SelectorExpr:
+			if x.Pos() > pos && !callerFound {
+				callerFound = true
+				lastSelectorExpr = x
+
+				start := lastSelectorExpr.X.Pos() - 1
+				end := lastSelectorExpr.X.End() - 1
+				lastSelectorExprStr = string(src[start:end])
+
+				if !isMiddleware {
+					start = lastSelectorExpr.Sel.Pos() - 1
+					end = lastSelectorExpr.Sel.End() - 1
+					descriptors[descIndex].Handler.Method = string(src[start:end])
+				}
+			}
+		case *ast.CallExpr:
+			if x.Pos() > pos && !selectorFound {
+				selectorFound = true
+				descriptors[descIndex].middlewaresStart = x.Pos()
+				lastCallExpr = *x
+			}
+		}
+		return true
+	})
+	return
 }
