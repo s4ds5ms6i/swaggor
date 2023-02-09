@@ -114,8 +114,6 @@ func main() {
 
 	descIndex := 0
 	for _, desc := range descriptors {
-		fmt.Println("~~~~~~>", desc.Headers)
-
 		for i := 1; i < len(desc.Handler.RawReturns); i++ {
 			errMsg := tryGetErrorMsg(desc.Handler.RawReturns[i])
 			if errMsg != "" {
@@ -211,13 +209,16 @@ paths:`)
 			if len(queryParams) == 0 && len(reqHeaders) == 0 {
 				swagger = fmt.Sprintf("%s%sparameters:\n", swagger, indent(6))
 			}
+		}
 
-			for h, t := range reqInputsFromContext {
+		if len(desc.Headers) > 0 {
+			for _, h := range desc.Headers {
 				swagger = fmt.Sprintf("%s%s- in: header\n", swagger, indent(8))
-				swagger = fmt.Sprintf("%s%sname: %s\n", swagger, indent(10), h)
-				swagger = fmt.Sprintf("%s%sdescription: API expects %s to be included in {UNKNOWN} header fields\n", swagger, indent(10), h)
+				swagger = fmt.Sprintf("%s%sname: %s\n", swagger, indent(10), h.Value)
+				swagger = fmt.Sprintf("%s%sdescription: API expects %s to be included in request headers.\n", swagger, indent(10), h.Value)
 				swagger = fmt.Sprintf("%s%sschema: \n", swagger, indent(10))
-				swagger = fmt.Sprintf("%s%stype: %s\n", swagger, indent(12), t)
+				swagger = fmt.Sprintf("%s%stype: %s\n", swagger, indent(12), "string") // TODO: Are all the header types string?
+				swagger = fmt.Sprintf("%s%srequired: true\n", swagger, indent(10))     // TODO: Are all the headers mandatory?
 			}
 		}
 
@@ -677,6 +678,7 @@ func fillHeadersOfMiddleware(descriptors []*Descriptor, packages map[string]*ast
 									headerDecl := getStringInBetween(l, "Header.Get(", ")")
 									headerDecl = getStringAfter(headerDecl, ".")
 									_, headerVal := findDeclPath(packages, headerDecl)
+									headerVal = getStringInBetween(headerVal, fmt.Sprintf("%s = ", headerDecl), "\n")
 									descriptors[i].Headers = append(descriptors[i].Headers, Header{Decl: headerDecl, Value: headerVal})
 								}
 							}
@@ -727,16 +729,12 @@ func findDeclPath(packages map[string]*ast.Package, name string) (string, string
 					start := x.Pos() - 1
 					end := x.End() - 1
 					b := string(src[start:end])
-					if declBody == "" && strings.Contains(b, fmt.Sprintf(" %s(", name)) {
+					if declBody == "" &&
+						(strings.Contains(b, fmt.Sprintf(" %s(", name)) ||
+							(strings.HasPrefix(name, "type") && strings.Contains(b, name)) ||
+							(strings.HasPrefix(b, "const ") && strings.Contains(b, name)) ||
+							(strings.HasPrefix(b, "var ") && strings.Contains(b, name))) {
 						declBody = b
-						return true
-					}
-				case *ast.ValueSpec:
-					start := x.Pos() - 1
-					end := x.End() - 1
-					b := string(src[start:end])
-					if declBody == "" && strings.Contains(b, fmt.Sprintf("%s = ", name)) {
-						declBody = strings.Trim(strings.Replace(b, fmt.Sprintf("%s = ", name), " ", -1), " ")
 						return true
 					}
 				}
