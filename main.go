@@ -612,15 +612,14 @@ func fillReturnsOfEachHandler(descriptors []*Descriptor) {
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch x := n.(type) {
 			case *ast.FuncDecl:
-				if !funcFound {
-					if x.Name.Name == descriptors[i].Handler.HandlerFuncName {
-						funcFound = true
-						firstFuncDecl = x
-						desc.Handler.HandlerFuncPos = x.Pos()
-						desc.Handler.HandlerFuncEnd = x.End()
-					}
+				if !funcFound && x.Name.Name == descriptors[i].Handler.HandlerFuncName {
+					funcFound = true
+					firstFuncDecl = x
+					desc.Handler.HandlerFuncPos = x.Pos()
+					desc.Handler.HandlerFuncEnd = x.End()
 				}
 			}
+
 			return true
 		})
 
@@ -638,6 +637,7 @@ func fillReturnsOfEachHandler(descriptors []*Descriptor) {
 					desc.Handler.RawReturns = append(desc.Handler.RawReturns, string(handlerSrc[start:end]))
 				}
 			}
+
 			return true
 		})
 	}
@@ -662,15 +662,14 @@ func fillHeadersOfMiddleware(descriptors []*Descriptor, packages map[string]*ast
 			ast.Inspect(f, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.FuncDecl:
-					if !funcFound {
-						if x.Name.Name == middleware.Name {
-							funcFound = true
-							firstFuncDecl = x
-							middlewareFuncPos = x.Pos()
-							middlewareFuncEnd = x.End()
-						}
+					if !funcFound && x.Name.Name == middleware.Name {
+						funcFound = true
+						firstFuncDecl = x
+						middlewareFuncPos = x.Pos()
+						middlewareFuncEnd = x.End()
 					}
 				}
+
 				return true
 			})
 
@@ -683,24 +682,31 @@ func fillHeadersOfMiddleware(descriptors []*Descriptor, packages map[string]*ast
 			ast.Inspect(f, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.ReturnStmt:
-					if len(x.Results) >= 1 && x.Pos() > firstFuncDecl.Pos() && x.End() < firstFuncDecl.End() {
-						start := x.Results[0].Pos() - 1
-						end := x.Results[0].End() - 1
-						retStr := string(middlewareSrc[start:end])
-						if strings.HasPrefix(retStr, "func(ctx echo.Context) error") {
-							funcLines := strings.Split(retStr, "\n")
-							for _, l := range funcLines {
-								if strings.Contains(l, "Header.Get(") {
-									headerDecl := util.GetStringInBetween(l, "Header.Get(", ")")
-									headerDecl = util.GetStringAfter(headerDecl, ".")
-									_, headerVal := findDeclPath(packages, headerDecl)
-									headerVal = util.GetStringInBetween(headerVal, fmt.Sprintf("%s = ", headerDecl), "\n")
-									descriptors[i].Headers = append(descriptors[i].Headers, Header{Decl: headerDecl, Value: headerVal})
-								}
-							}
+					if len(x.Results) < 1 || x.Pos() <= firstFuncDecl.Pos() || x.End() >= firstFuncDecl.End() {
+						break
+					}
+
+					start := x.Results[0].Pos() - 1
+					end := x.Results[0].End() - 1
+					retStr := string(middlewareSrc[start:end])
+					if !strings.HasPrefix(retStr, "func(ctx echo.Context) error") {
+						break
+					}
+
+					funcLines := strings.Split(retStr, "\n")
+					for _, l := range funcLines {
+						if !strings.Contains(l, "Header.Get(") {
+							continue
 						}
+
+						headerDecl := util.GetStringInBetween(l, "Header.Get(", ")")
+						headerDecl = util.GetStringAfter(headerDecl, ".")
+						_, headerVal := findDeclPath(packages, headerDecl)
+						headerVal = util.GetStringInBetween(headerVal, fmt.Sprintf("%s = ", headerDecl), "\n")
+						descriptors[i].Headers = append(descriptors[i].Headers, Header{Decl: headerDecl, Value: headerVal})
 					}
 				}
+
 				return true
 			})
 		}
@@ -751,9 +757,11 @@ func findDeclPath(packages map[string]*ast.Package, name string) (string, string
 							(strings.HasPrefix(b, "const ") && strings.Contains(b, name)) ||
 							(strings.HasPrefix(b, "var ") && strings.Contains(b, name))) {
 						declBody = b
+
 						return true
 					}
 				}
+
 				return true
 			})
 			if len(declBody) > 0 {
@@ -770,6 +778,7 @@ func findDeclPath(packages map[string]*ast.Package, name string) (string, string
 			}
 		}
 	}
+
 	return "", ""
 }
 
@@ -926,14 +935,16 @@ func fillHandler(descriptors []*Descriptor) {
 			ast.Inspect(f, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.BasicLit:
-					if x.Pos() >= arg.Pos() && !argFound {
-						argFound = true
-						switch j {
-						case 0:
-							descriptors[i].Handler.URL = util.GetStringInBetween(x.Value, "\"", "\"")
-						case 1:
-							descriptors[i].Handler.HandlerFuncName = util.GetStringInBetween(x.Value, "\"", "\"")
-						}
+					if x.Pos() < arg.Pos() || argFound {
+						break
+					}
+
+					argFound = true
+					switch j {
+					case 0:
+						descriptors[i].Handler.URL = util.GetStringInBetween(x.Value, "\"", "\"")
+					case 1:
+						descriptors[i].Handler.HandlerFuncName = util.GetStringInBetween(x.Value, "\"", "\"")
 					}
 				}
 				return true
@@ -962,16 +973,21 @@ func fillMiddlewares(descriptors []*Descriptor) {
 			ast.Inspect(f, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.BasicLit:
-					if x.Pos() >= arg.Pos() && !argFound {
-						argFound = true
-						if j == 1 {
-							mw := util.GetStringInBetween(x.Value, "\"", "\"")
-							if !strings.HasSuffix(descriptors[i].Handler.URL, mw) {
-								descriptors[i].Middlewares = append(descriptors[i].Middlewares, Middleware{Name: mw})
-							}
-						}
+					if x.Pos() < arg.Pos() || argFound {
+						break
+					}
+
+					argFound = true
+					if j != 1 {
+						break
+					}
+
+					mw := util.GetStringInBetween(x.Value, "\"", "\"")
+					if !strings.HasSuffix(descriptors[i].Handler.URL, mw) {
+						descriptors[i].Middlewares = append(descriptors[i].Middlewares, Middleware{Name: mw})
 					}
 				}
+
 				return true
 			})
 		}
