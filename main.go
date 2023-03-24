@@ -126,16 +126,7 @@ func main() {
 				descriptors[descIndex].Handler.Returns = append(descriptors[descIndex].Handler.Returns, Return{StatusCode: "500", Message: errMsg})
 			} else if strings.Contains(desc.Handler.RawReturns[i], ".JSON(") {
 				responseFields := getFieldsFromReturn(desc, desc.Handler.RawReturns[i], packages)
-				json := "{\n"
-				for _, field := range responseFields {
-					if json != "{\n" && !strings.HasSuffix(json, ",\n") {
-						json = fmt.Sprintf("%s,\n", strings.TrimRight(json, "\n"))
-					}
-
-					json = json + getJSONBody(packages, field, field.IsArray)
-				}
-
-				json = fmt.Sprintf("%s\n}", strings.TrimRight(json, ",\n"))
+				json := getJSON(responseFields, packages)
 
 				descriptors[descIndex].Handler.Returns = append(descriptors[descIndex].Handler.Returns, Return{StatusCode: "200", JSON: json})
 			} else if strings.Contains(desc.Handler.RawReturns[i], "(") {
@@ -234,18 +225,24 @@ paths:`)
 
 		swagger = fmt.Sprintf("%s%sresponses:\n", swagger, indent(6))
 		for _, ret := range distinctReturns {
-			swagger = fmt.Sprintf("%s%s'%s':\n", swagger, indent(8), ret.StatusCode)
+			var baseIndent uint = 8
+			swagger = fmt.Sprintf("%s%s'%s':\n", swagger, indent(baseIndent), ret.StatusCode)
+			baseIndent += 2
 			if len(ret.Message) > 0 {
-				swagger = fmt.Sprintf("%s%sdescription: %s\n", swagger, indent(10), ret.Message)
+				swagger = fmt.Sprintf("%s%sdescription: %s\n", swagger, indent(baseIndent), ret.Message)
 			} else {
-				swagger = fmt.Sprintf("%s%sdescription: %s\n", swagger, indent(10), "no description")
+				swagger = fmt.Sprintf("%s%sdescription: %s\n", swagger, indent(baseIndent), "no description")
 			}
 
-			swagger = fmt.Sprintf("%s%scontent:\n", swagger, indent(10))
-			swagger = fmt.Sprintf("%s%sapplication/json:\n", swagger, indent(12))
-			swagger = fmt.Sprintf("%s%sschema:\n", swagger, indent(14))
-			swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(16))
-			swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(16))
+			swagger = fmt.Sprintf("%s%scontent:\n", swagger, indent(baseIndent))
+			baseIndent += 2
+			swagger = fmt.Sprintf("%s%sapplication/json:\n", swagger, indent(baseIndent))
+			baseIndent += 2
+			swagger = fmt.Sprintf("%s%sschema:\n", swagger, indent(baseIndent))
+			baseIndent += 2
+			swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(baseIndent))
+			swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(baseIndent))
+			baseIndent += 2
 
 			if ret.StatusCode == "200" {
 				jsonString := []byte(ret.JSON)
@@ -264,38 +261,43 @@ paths:`)
 				// fmt.Println("============================")
 
 				yamlLines := strings.Split(string(yamlBytes), "\n")
-				var arrInd uint
+				currentColumn := 0
+				ind := baseIndent
 				for ln, yamlLine := range yamlLines {
-					yamlLineTokens := strings.Split(yamlLine, ":")
-					var extInd uint = 0
-					if ln >= 1 && strings.HasSuffix(strings.Trim(yamlLines[ln-1], " "), ":") {
-						extInd = 2
+					c := util.CountLeadingSpaces(strings.Replace(yamlLine, "-", " ", 1)) / 2
+					if c > uint(currentColumn) {
+						ind += 2
+					} else if c < uint(currentColumn) {
+						if c > 0 {
+							ind = ind - c*2
+						} else {
+							ind = baseIndent
+						}
 					}
 
+					currentColumn = int(c)
+					yamlLineTokens := strings.Split(yamlLine, ":")
 					if (len(yamlLineTokens) == 1 && !util.IsEmptyOrWhitespace(yamlLineTokens[0])) ||
 						(len(yamlLineTokens) == 2 && util.IsEmptyOrWhitespace(yamlLineTokens[1])) {
 
 						yamlLineTokens[0] = strings.Replace(yamlLineTokens[0], "@", "", -1)
 						if len(yamlLines) > ln && strings.Contains(yamlLines[ln+1], "- ") { // array
-							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(extInd+18), yamlLineTokens[0])
-							swagger = fmt.Sprintf("%s%stype: array\n%sitems:\n%stype: object\n%sproperties:\n",
-								swagger, indent(extInd+22), indent(extInd+22), indent(extInd+24), indent(extInd+24))
+							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(ind), strings.Trim(yamlLineTokens[0], " "))
+							ind += 2
+							swagger = fmt.Sprintf("%s%stype: array\n", swagger, indent(ind))
+							swagger = fmt.Sprintf("%s%sitems:\n", swagger, indent(ind))
+							ind += 2
+							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind))
+							swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(ind))
 						} else {
-							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(extInd+18), yamlLineTokens[0])
-							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(extInd+20))
-							swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(extInd+20))
+							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(ind), strings.Trim(yamlLineTokens[0], " "))
+							ind += 2
+							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind))
+							swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(ind))
 						}
 					} else if len(yamlLineTokens) == 2 {
 						if strings.Contains(yamlLineTokens[0], "- ") { // array
-							yamlLineTokens[0] = strings.Replace(yamlLineTokens[0], "- ", "  ", 1)
-							arrInd = util.CountLeadingSpaces(yamlLineTokens[0])
-						}
-
-						ind := util.CountLeadingSpaces(yamlLineTokens[0])
-						if ind > 0 && ind == arrInd {
-							ind += 2
-						} else {
-							arrInd = 0
+							yamlLineTokens[0] = strings.Replace(yamlLineTokens[0], "- ", "", 1)
 						}
 
 						if ln >= 1 && strings.HasPrefix(strings.TrimLeft(yamlLines[ln-1], " "), "'@") {
@@ -303,15 +305,19 @@ paths:`)
 							swagger = strings.TrimRight(swagger, " ")
 							swagger = strings.TrimSuffix(swagger, "type: object\n")
 							swagger = strings.TrimRight(swagger, " ")
-							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind+20))
-							swagger = fmt.Sprintf("%s%sadditionalProperties:\n", swagger, indent(ind+20))
-							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind+22))
+							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind))
+							swagger = fmt.Sprintf("%s%sadditionalProperties:\n", swagger, indent(ind))
+							ind += 2
+							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind))
+							ind -= 4
 						} else {
-							exp := indent(ind+18) + yamlLineTokens[0]
+							exp := indent(ind) + strings.Trim(yamlLineTokens[0], " ")
 							swagger = fmt.Sprintf("%s%s:\n", swagger, exp)
+							ind += 2
 							swagger = fmt.Sprintf("%s%stype: %s\n",
-								swagger, indent(util.CountLeadingSpaces(exp)+2),
+								swagger, indent(ind),
 								util.GoTypeToSwagger(strings.TrimLeft(yamlLineTokens[1], " ")))
+							ind -= 2
 						}
 					}
 				}
@@ -819,10 +825,16 @@ func getJSONBody(packages map[string]*ast.Package, field Field, isArray bool) st
 					innerJson, indent(extInd+6), mapTypes[0], mapTypes[1])
 				innerJson = fmt.Sprintf("%s%s},\n",
 					innerJson, indent(extInd+4))
-			} else if strings.HasPrefix(slTokens[1], "[") { // array or slice
-				t := util.GetStringAfter(slTokens[1], "]")
-				if len(t) == 0 {
-					continue
+			} else {
+				var t string
+				isArr := strings.Contains(slTokens[1], "]")
+				if isArr {
+					t = util.GetStringAfter(slTokens[1], "]")
+					if len(t) == 0 {
+						continue
+					}
+				} else {
+					t = slTokens[1]
 				}
 
 				jsonName := util.GetStringInBetween(slTokens[2], "`json:\"", "\"`")
@@ -834,21 +846,48 @@ func getJSONBody(packages map[string]*ast.Package, field Field, isArray bool) st
 							JSONName:    jsonName,
 							Type:        t,
 							TypeDef:     structBody,
-						}, true))
+						}, isArr))
 				}
 			}
 		}
 
-		innerJson = strings.TrimRight(innerJson, ",\n")
-		innerJson = fmt.Sprintf("%s\n%s}\n", innerJson, indent(extInd+2))
+		innerJson = fmt.Sprintf("%s\n%s},\n", innerJson, indent(extInd+2))
 		if isArray {
-			innerJson = fmt.Sprintf("%s%s]\n", innerJson, indent(extInd))
+			innerJson = fmt.Sprintf("%s%s],\n", innerJson, indent(extInd))
 		}
+
 		json = fmt.Sprintf("%s%s", json, innerJson)
 		// fmt.Println("--->", json)
 	}
 
 	return json
+}
+
+func getJSON(responseFields []Field, packages map[string]*ast.Package) string {
+	json := "{\n"
+	for _, field := range responseFields {
+		if json != "{\n" && !strings.HasSuffix(json, ",\n") {
+			json = fmt.Sprintf("%s,\n", strings.TrimRight(json, "\n"))
+		}
+
+		json = json + getJSONBody(packages, field, field.IsArray)
+	}
+
+	json = fmt.Sprintf("%s\n}", strings.TrimRight(json, ",\n"))
+	jsonLines := strings.Split(util.GetStringAfter(json, "{"), "\n")
+	finalJSON := "{\n"
+	for _, jl := range jsonLines {
+		l := strings.Trim(jl, " ")
+		if l == "" || l == "\n" {
+			continue
+		} else if strings.Contains(l, "}") || strings.Contains(l, "]") {
+			finalJSON = strings.TrimRight(finalJSON, ",\n")
+		}
+
+		finalJSON = finalJSON + "\n" + jl
+	}
+
+	return finalJSON
 }
 
 func findAssignment(src []byte,
