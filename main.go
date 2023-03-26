@@ -6,9 +6,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/ioutil"
+	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,26 +57,42 @@ type Header struct {
 	Value string
 }
 
-func main() {
-	projectRootPath := "/home/shahram/projects/minimal-user-profile"
-	excludedPaths := map[string]struct{}{
-		"vendor": {},
-		"assets": {},
-		"docs":   {},
-	}
-	projectRootPath = strings.TrimRight(projectRootPath, "/")
-	files, err := ioutil.ReadDir(projectRootPath)
+var (
+	excludedPaths   []string
+	projectRootPath = "/home/shahram/projects/minimal-user-profile"
+	projectDirs     []string
+)
+
+func walk(s string, d fs.DirEntry, err error) error {
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	var projectDirs []string
-	for _, f := range files {
-		if _, ok := excludedPaths[f.Name()]; f.IsDir() && !strings.HasPrefix(f.Name(), ".") && !ok {
-			projectDirs = append(projectDirs, fmt.Sprintf("%s/%s", projectRootPath, f.Name()))
+	if d.IsDir() && !strings.HasPrefix(s, projectRootPath+"/.") && s != projectRootPath {
+		isExcluded := false
+		for _, ep := range excludedPaths {
+			if strings.HasPrefix(s, ep) {
+				isExcluded = true
+				break
+			}
+		}
+
+		if !isExcluded {
+			projectDirs = append(projectDirs, s)
 		}
 	}
 
+	return nil
+}
+
+func main() {
+	projectRootPath = strings.TrimRight(projectRootPath, "/")
+	excludedPaths = []string{
+		projectRootPath + "/vendor",
+		projectRootPath + "/assets",
+		projectRootPath + "/docs",
+	}
+	filepath.WalkDir(projectRootPath, walk)
 	packages := make(map[string]*ast.Package)
 	for _, dir := range projectDirs {
 		fs := token.NewFileSet()
@@ -164,9 +181,14 @@ paths:`)
 			for i, distRet := range distinctReturns {
 				if distRet.StatusCode == ret.StatusCode {
 					found = true
+					if len(ret.JSON) > len(distRet.JSON) {
+						distinctReturns[i].JSON = ret.JSON
+					}
+
 					if !util.IsEmptyOrWhitespace(ret.Message) {
 						distinctReturns[i].Message = fmt.Sprintf("%s / %s", distinctReturns[i].Message, ret.Message)
 					}
+
 					break
 				}
 			}
@@ -247,7 +269,7 @@ paths:`)
 			if ret.StatusCode == "200" {
 				jsonString := []byte(ret.JSON)
 				var jsonMap map[string]interface{}
-				err = json.Unmarshal(jsonString, &jsonMap)
+				err := json.Unmarshal(jsonString, &jsonMap)
 				if err != nil {
 					panic(err)
 				}
@@ -263,6 +285,7 @@ paths:`)
 				yamlLines := strings.Split(string(yamlBytes), "\n")
 				currentColumn := 0
 				ind := baseIndent
+				arrayColumn := -1
 				for ln, yamlLine := range yamlLines {
 					c := util.CountLeadingSpaces(strings.Replace(yamlLine, "-", " ", 1)) / 2
 					if c > uint(currentColumn) {
@@ -270,6 +293,9 @@ paths:`)
 					} else if c < uint(currentColumn) {
 						if c > 0 {
 							ind = ind - c*2
+							if arrayColumn != -1 && c < uint(arrayColumn) {
+								ind -= 4
+							}
 						} else {
 							ind = baseIndent
 						}
@@ -297,6 +323,7 @@ paths:`)
 						}
 					} else if len(yamlLineTokens) == 2 {
 						if strings.Contains(yamlLineTokens[0], "- ") { // array
+							arrayColumn = currentColumn
 							yamlLineTokens[0] = strings.Replace(yamlLineTokens[0], "- ", "", 1)
 						}
 
@@ -358,7 +385,7 @@ type Field struct {
 }
 
 func getFieldsFromReturn(desc *Descriptor, returnStatement string, packages map[string]*ast.Package) []Field {
-	responseFields := getResponseFields(returnStatement, packages)
+	responseFields := getResponseFields(returnStatement, desc.Handler, packages)
 	for fi, field := range responseFields {
 		src, err := os.ReadFile(desc.Handler.HandlerPath)
 		if err != nil {
@@ -417,7 +444,7 @@ func getFieldsFromReturn(desc *Descriptor, returnStatement string, packages map[
 	return responseFields
 }
 
-func getResponseFields(returnStatement string, packages map[string]*ast.Package) []Field {
+func getResponseFields(returnStatement string, handler Handler, packages map[string]*ast.Package) []Field {
 	rawResponse := strings.Trim(strings.TrimRight(util.GetStringAfter(returnStatement, ","), ")"), " ")
 	if strings.Contains(rawResponse, "{") {
 		structName := util.GetStringBefore(rawResponse, "{")
@@ -476,7 +503,50 @@ func getResponseFields(returnStatement string, packages map[string]*ast.Package)
 		}
 
 		return processedResponse
+	} else {
+		src, err := os.ReadFile(handler.HandlerPath)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		f, err := getFile(src, 0)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		processedReturnStatement := ""
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.AssignStmt:
+				if x.Pos() < handler.HandlerFuncPos || x.End() > handler.HandlerFuncEnd {
+					break
+				}
+
+				for li, lhs := range x.Lhs {
+					start := lhs.Pos() - 1
+					end := lhs.End() - 1
+					if string(src[start:end]) != rawResponse {
+						continue
+					}
+
+					start = x.Rhs[li].Pos() - 1
+					end = x.Rhs[li].End() - 1
+					rhs := string(src[start:end])
+					if !strings.Contains(rhs, "{") {
+						continue
+					}
+
+					processedReturnStatement = strings.Replace(returnStatement, rawResponse, rhs, 1)
+				}
+			}
+
+			return true
+		})
+		if processedReturnStatement != "" {
+			return getResponseFields(processedReturnStatement, handler, packages)
+		}
 	}
+
 	return nil
 }
 
@@ -838,6 +908,11 @@ func getJSONBody(packages map[string]*ast.Package, field Field, isArray bool) st
 				}
 
 				jsonName := util.GetStringInBetween(slTokens[2], "`json:\"", "\"`")
+				if strings.Contains(t, ".") {
+					tTokens := strings.Split(t, ".")
+					t = tTokens[len(tTokens)-1]
+				}
+
 				_, structBody := findDeclPath(packages, fmt.Sprintf("type %s struct", t))
 				if ok, _ := util.IsPrimitiveType(t); !ok {
 					innerJson = fmt.Sprintf("%s%s", innerJson,
