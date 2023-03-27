@@ -264,7 +264,6 @@ paths:`)
 			baseIndent += 2
 			swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(baseIndent))
 			swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(baseIndent))
-			baseIndent += 2
 
 			if ret.StatusCode == "200" {
 				jsonString := []byte(ret.JSON)
@@ -283,47 +282,42 @@ paths:`)
 				// fmt.Println("============================")
 
 				yamlLines := strings.Split(string(yamlBytes), "\n")
-				currentColumn := 0
-				ind := baseIndent
-				arrayColumn := -1
+				var yamlColumn, openAPIColumn int
+				var arrayColumn = -1
 				for ln, yamlLine := range yamlLines {
-					c := util.CountLeadingSpaces(strings.Replace(yamlLine, "-", " ", 1)) / 2
-					if c > uint(currentColumn) {
-						ind += 2
-					} else if c < uint(currentColumn) {
-						if c > 0 {
-							ind = ind - c*2
-							if arrayColumn != -1 && c < uint(arrayColumn) {
-								ind -= 4
-							}
-						} else {
-							ind = baseIndent
-						}
+					yamlColumn = int(util.CountLeadingSpaces(strings.Replace(yamlLine, "-", " ", 1)) / 2)
+					openAPIColumn = yamlColumn*2 + 1
+					if yamlColumn >= arrayColumn && arrayColumn != -1 {
+						openAPIColumn++
+					} else {
+						arrayColumn = -1
 					}
 
-					currentColumn = int(c)
+					fmt.Println(yamlLine, " ", yamlColumn, " ", openAPIColumn)
+
 					yamlLineTokens := strings.Split(yamlLine, ":")
 					if (len(yamlLineTokens) == 1 && !util.IsEmptyOrWhitespace(yamlLineTokens[0])) ||
 						(len(yamlLineTokens) == 2 && util.IsEmptyOrWhitespace(yamlLineTokens[1])) {
 
 						yamlLineTokens[0] = strings.Replace(yamlLineTokens[0], "@", "", -1)
 						if len(yamlLines) > ln && strings.Contains(yamlLines[ln+1], "- ") { // array
-							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(ind), strings.Trim(yamlLineTokens[0], " "))
-							ind += 2
-							swagger = fmt.Sprintf("%s%stype: array\n", swagger, indent(ind))
-							swagger = fmt.Sprintf("%s%sitems:\n", swagger, indent(ind))
-							ind += 2
-							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind))
-							swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(ind))
+							arrayColumn = yamlColumn
+							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(uint(openAPIColumn)*2+baseIndent), strings.Trim(yamlLineTokens[0], " "))
+							openAPIColumn++
+							swagger = fmt.Sprintf("%s%stype: array\n", swagger, indent(uint(openAPIColumn)*2+baseIndent))
+							swagger = fmt.Sprintf("%s%sitems:\n", swagger, indent(uint(openAPIColumn)*2+baseIndent))
+							openAPIColumn++
+							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(uint(openAPIColumn)*2+baseIndent))
+							swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(uint(openAPIColumn)*2+baseIndent))
 						} else {
-							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(ind), strings.Trim(yamlLineTokens[0], " "))
-							ind += 2
-							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind))
-							swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(ind))
+							swagger = fmt.Sprintf("%s%s%s:\n", swagger, indent(uint(openAPIColumn)*2+baseIndent), strings.Trim(yamlLineTokens[0], " "))
+							openAPIColumn++
+							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(uint(openAPIColumn)*2+baseIndent))
+							swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(uint(openAPIColumn)*2+baseIndent))
 						}
 					} else if len(yamlLineTokens) == 2 {
 						if strings.Contains(yamlLineTokens[0], "- ") { // array
-							arrayColumn = currentColumn
+							arrayColumn = yamlColumn
 							yamlLineTokens[0] = strings.Replace(yamlLineTokens[0], "- ", "", 1)
 						}
 
@@ -332,19 +326,20 @@ paths:`)
 							swagger = strings.TrimRight(swagger, " ")
 							swagger = strings.TrimSuffix(swagger, "type: object\n")
 							swagger = strings.TrimRight(swagger, " ")
-							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind))
-							swagger = fmt.Sprintf("%s%sadditionalProperties:\n", swagger, indent(ind))
-							ind += 2
-							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(ind))
-							ind -= 4
+							openAPIColumn--
+							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(uint(openAPIColumn)*2+baseIndent))
+							swagger = fmt.Sprintf("%s%sadditionalProperties:\n", swagger, indent(uint(openAPIColumn)*2+baseIndent))
+							openAPIColumn++
+							swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(uint(openAPIColumn)*2+baseIndent))
+							openAPIColumn--
 						} else {
-							exp := indent(ind) + strings.Trim(yamlLineTokens[0], " ")
+							exp := indent(uint(openAPIColumn)*2+baseIndent) + strings.Trim(yamlLineTokens[0], " ")
 							swagger = fmt.Sprintf("%s%s:\n", swagger, exp)
-							ind += 2
+							openAPIColumn++
 							swagger = fmt.Sprintf("%s%stype: %s\n",
-								swagger, indent(ind),
+								swagger, indent(uint(openAPIColumn)*2+baseIndent),
 								util.GoTypeToSwagger(strings.TrimLeft(yamlLineTokens[1], " ")))
-							ind -= 2
+							openAPIColumn--
 						}
 					}
 				}
@@ -357,10 +352,10 @@ paths:`)
 				swagger = fmt.Sprintf("%s%stype: string\n", swagger, indent(24))
 			}
 		}
-		// fmt.Println("============================")
-		// fmt.Println("============================")
 	}
 
+	// fmt.Println("============================")
+	// fmt.Println()
 	fmt.Println(swagger)
 }
 

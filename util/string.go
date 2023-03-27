@@ -128,6 +128,7 @@ func IsPrimitiveType(t string) (bool, string) {
 		"error":       "nil",
 		"bool":        "true",
 		"string":      "\"string\"",
+		"time.Time":   "\"time\"",
 		"*complex64":  "(0+0i)",
 		"*complex128": "(0+0i)",
 		"*float32":    "0.0",
@@ -146,6 +147,7 @@ func IsPrimitiveType(t string) (bool, string) {
 		"*error":      "nil",
 		"*bool":       "true",
 		"*string":     "\"string\"",
+		"*time.Time":  "\"time\"",
 	}
 
 	defaultValue, ok := types[t]
@@ -189,7 +191,9 @@ func GoTypeToSwagger(t string) string {
 		"*bool":
 		return "boolean"
 	case "string",
-		"*string":
+		"*string",
+		"time.Time",
+		"*time.Time":
 		return "string"
 	default:
 		return ""
