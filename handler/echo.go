@@ -1,13 +1,13 @@
 package handler
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v2"
 
+	"gitlab.snapp.ir/security_regulatory/swaggor/log"
 	"gitlab.snapp.ir/security_regulatory/swaggor/util"
 )
 
@@ -85,10 +86,14 @@ func walk(s string, d fs.DirEntry, err error) error {
 	return nil
 }
 
-func Generate(rootDir string, excludedDirs []string) {
+func Generate(rootDir string, output string, excludedDirs []string) {
 	projectRootPath = strings.TrimRight(rootDir, "/")
 	if len(rootDir) == 0 {
 		log.Fatal("the project root directory could not be empty. use --project-root (or -r) to set the project root directory.")
+	}
+
+	if len(output) == 0 {
+		output = "./swagger.yml"
 	}
 
 	vendorFound := false
@@ -131,7 +136,7 @@ func Generate(rootDir string, excludedDirs []string) {
 	}
 
 	if descriptors == nil && len(descriptors) == 0 {
-		fmt.Printf("No %s tag found.\n", CommentHeader)
+		log.Error("No %s tag found.\n", CommentHeader)
 		return
 	}
 
@@ -141,12 +146,6 @@ func Generate(rootDir string, excludedDirs []string) {
 	fillMiddlewaresPath(descriptors, packages)
 	fillReturnsOfEachHandler(descriptors)
 	fillHeadersOfMiddleware(descriptors, packages)
-
-	// fmt.Println(descriptors[0].TaggedInPath, descriptors[0].tagEnd, descriptors[0].URL, descriptors[0].Handler.HandlerFuncName,
-	// 	descriptors[0].Handler.Method, descriptors[0].Handler.HandlerPath)
-	//
-	// fmt.Println(descriptors[0].Handler.RawReturns[0])
-	// fmt.Println("----------------------------------------")
 
 	descIndex := 0
 	for _, desc := range descriptors {
@@ -173,8 +172,6 @@ func Generate(rootDir string, excludedDirs []string) {
 		sort.Slice(descriptors[descIndex].Handler.Returns[:], func(i, j int) bool {
 			return descriptors[descIndex].Handler.Returns[i].StatusCode < descriptors[descIndex].Handler.Returns[j].StatusCode
 		})
-		// fmt.Println(descriptors[descIndex].Handler.Returns)
-		// fmt.Println("============================")
 		descIndex++
 	}
 
@@ -291,9 +288,6 @@ paths:`)
 					panic(err)
 				}
 
-				// fmt.Println(string(y))
-				// fmt.Println("============================")
-
 				yamlLines := strings.Split(string(yamlBytes), "\n")
 				var yamlColumn, openAPIColumn int
 				var arrayColumn = -1
@@ -306,7 +300,7 @@ paths:`)
 						arrayColumn = -1
 					}
 
-					fmt.Println(yamlLine, " ", yamlColumn, " ", openAPIColumn)
+					log.Debugf("yaml line: %s | yaml column: %d | openAPI column: %d", yamlLine, yamlColumn, openAPIColumn)
 
 					yamlLineTokens := strings.Split(yamlLine, ":")
 					if (len(yamlLineTokens) == 1 && !util.IsEmptyOrWhitespace(yamlLineTokens[0])) ||
@@ -367,9 +361,18 @@ paths:`)
 		}
 	}
 
-	// fmt.Println("============================")
-	// fmt.Println()
-	fmt.Println(swagger)
+	f, err := os.Create(output)
+	if err != nil {
+		log.Fatalf("creating output directory failed:%s", err)
+	}
+
+	w := bufio.NewWriter(f)
+	_, err = w.WriteString(swagger)
+	if err != nil {
+		log.Fatalf("writing to output directory failed:%s", err)
+	}
+
+	w.Flush()
 }
 
 func indent(count uint) string {
@@ -937,7 +940,6 @@ func getJSONBody(packages map[string]*ast.Package, field Field, isArray bool) st
 		}
 
 		json = fmt.Sprintf("%s%s", json, innerJson)
-		// fmt.Println("--->", json)
 	}
 
 	return json

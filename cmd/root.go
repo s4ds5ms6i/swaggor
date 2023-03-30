@@ -1,20 +1,24 @@
 package cmd
 
 import (
+	stdlog "log"
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"gitlab.snapp.ir/security_regulatory/swaggor/config"
+	"gitlab.snapp.ir/security_regulatory/swaggor/log"
 )
 
-// rootCmd represents the base command when called without any subcommands
-var rootCMD = &cobra.Command{
-	Use:   "swaggor",
-	Short: "An OpenAPI (Swagger) generator for Golang",
-	Long:  `Swaggor is an OpenAPI (Swagger) generator for Golang, while (echo) acts as a web service.`,
-}
+var (
+	cfgFile string
+	rootCMD = &cobra.Command{
+		Use:   "swaggor",
+		Short: "An OpenAPI (Swagger) generator for Golang",
+		Long:  `Swaggor is an OpenAPI (Swagger) generator for Golang, while (echo) acts as a web service.`,
+	}
+)
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	err := rootCMD.Execute()
 	if err != nil {
@@ -23,5 +27,14 @@ func Execute() {
 }
 
 func init() {
+	err := config.ParseConfig(cfgFile)
+	if err != nil {
+		stdlog.Fatalf("config file parse failed: %s", err)
+	}
+
+	log.Init(config.C.Log.Level, config.C.Log.Path)
+
+	rootCMD.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path (default is ./config.yaml)")
+
 	rootCMD.AddCommand(generateCMD)
 }

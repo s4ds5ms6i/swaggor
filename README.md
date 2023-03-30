@@ -25,7 +25,7 @@ middleware.SomeMiddleware(middleware.SomeEnum)))
 ```
 Then you run a CLI command to generate OpenAPI:
 ```bash
-swaggor -r <project directory> [-e <directories to be excluded in csv form>]
+swaggor -r <project directory> [-e <directories to be excluded in csv form> [-o <output directory>]]
 ```
 \
 **As of right now, this project is still in the construction phase and is not fully functional.**

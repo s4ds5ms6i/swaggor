@@ -1,4 +1,5 @@
 TEST_PROJECT_ROOT_DIR="/home/shahram/projects/minimal-user-profile"
+DEFAULT_OUTPUT="./swagger.yml"
 DEFAULT_EXCLUDED_DIRS="vendor,docs,assets"
 
 ############################################################
@@ -8,7 +9,7 @@ build:
 	go build -v -race .
 
 run:
-	go run main.go generate -r $(TEST_PROJECT_ROOT_DIR) -e $(DEFAULT_EXCLUDED_DIRS)
+	go run main.go generate -r $(TEST_PROJECT_ROOT_DIR) -e $(DEFAULT_EXCLUDED_DIRS) -o $(DEFAULT_OUTPUT)
 
 vendor:
 	go mod vendor -v

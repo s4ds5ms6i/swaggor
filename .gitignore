@@ -18,3 +18,5 @@ swaggor
 /.report.xml
 /testCoverageReport.html
 /.testCoverage.txt
+/swagger.yml
+/swaggor.log
