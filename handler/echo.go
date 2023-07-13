@@ -20,7 +20,7 @@ import (
 	"gitlab.snapp.ir/security_regulatory/swaggor/util"
 )
 
-const CommentHeader = "SWAGGOR"
+const CommentHeader = "@swagger"
 
 type Descriptor struct {
 	TaggedInPath     string
@@ -33,6 +33,7 @@ type Descriptor struct {
 
 type Handler struct {
 	HandlerPath     string
+	HandlerPackage  string
 	HandlerFuncName string
 	HandlerFuncPos  token.Pos
 	HandlerFuncEnd  token.Pos
@@ -237,12 +238,12 @@ paths:`)
 			}
 		}
 
-		reqInputsFromContext := getFromContext(desc, packages)
-		if len(reqInputsFromContext) > 0 {
-			if len(queryParams) == 0 && len(reqHeaders) == 0 {
-				swagger = fmt.Sprintf("%s%sparameters:\n", swagger, indent(6))
-			}
-		}
+		// reqInputsFromContext := getFromContext(desc, packages)
+		// if len(reqInputsFromContext) > 0 {
+		// 	if len(queryParams) == 0 && len(reqHeaders) == 0 {
+		// 		swagger = fmt.Sprintf("%s%sparameters:\n", swagger, indent(6))
+		// 	}
+		// }
 
 		if len(desc.Headers) > 0 {
 			for _, h := range desc.Headers {
@@ -799,7 +800,10 @@ func fillHeadersOfMiddleware(descriptors []*Descriptor, packages map[string]*ast
 
 func fillHandlerPath(descriptors []*Descriptor, packages map[string]*ast.Package) {
 	for _, desc := range descriptors {
-		desc.Handler.HandlerPath, _ = findDeclPath(packages, desc.Handler.HandlerFuncName)
+		desc.Handler.HandlerPath, _ = findDeclPath(
+			map[string]*ast.Package{
+				desc.Handler.HandlerPackage: packages[desc.Handler.HandlerPackage],
+			}, desc.Handler.HandlerFuncName)
 	}
 }
 
@@ -814,7 +818,7 @@ func fillMiddlewaresPath(descriptors []*Descriptor, packages map[string]*ast.Pac
 func findDeclPath(packages map[string]*ast.Package, name string) (string, string) {
 	for _, pkg := range packages {
 		for path, file := range pkg.Files {
-			if file.Decls == nil || len(file.Decls) == 0 {
+			if file.Decls == nil || len(file.Decls) == 0 || strings.HasSuffix(path, "_test.go") {
 				continue
 			}
 
@@ -1023,10 +1027,24 @@ func findTags(path string) (descriptors []*Descriptor) {
 
 	for _, c := range f.Comments {
 		if strings.HasPrefix(c.Text(), CommentHeader) {
+			tagParts := strings.Split(c.Text(), ":")
+			if len(tagParts) < 2 {
+				continue
+			}
+
+			handlerParts := strings.Split(tagParts[1], ".")
+			if len(handlerParts) != 2 {
+				continue
+			}
+
 			descriptors = append(descriptors,
 				&Descriptor{
 					TagEnd:       c.End(),
 					TaggedInPath: path,
+					Handler: Handler{
+						HandlerPackage:  handlerParts[0],
+						HandlerFuncName: strings.TrimRight(handlerParts[1], "\n"),
+					},
 				})
 		}
 	}
@@ -1051,7 +1069,7 @@ func fillHandler(descriptors []*Descriptor) {
 			log.Fatal(err)
 		}
 
-		for j, arg := range lastCallExpr.Args {
+		for _, arg := range lastCallExpr.Args {
 			var argFound bool
 			ast.Inspect(f, func(n ast.Node) bool {
 				switch x := n.(type) {
@@ -1061,13 +1079,9 @@ func fillHandler(descriptors []*Descriptor) {
 					}
 
 					argFound = true
-					switch j {
-					case 0:
-						descriptors[i].Handler.URL = util.GetStringInBetween(x.Value, "\"", "\"")
-					case 1:
-						descriptors[i].Handler.HandlerFuncName = util.GetStringInBetween(x.Value, "\"", "\"")
-					}
+					descriptors[0].Handler.URL = util.GetStringInBetween(x.Value, "\"", "\"")
 				}
+
 				return true
 			})
 		}
