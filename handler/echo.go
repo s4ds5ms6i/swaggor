@@ -158,7 +158,9 @@ func Generate(rootDir string, output string, excludedDirs []string) {
 				responseFields := getFieldsFromReturn(desc, desc.Handler.RawReturns[i], packages)
 				json := getJSON(responseFields, packages)
 
-				descriptors[descIndex].Handler.Returns = append(descriptors[descIndex].Handler.Returns, Return{StatusCode: "200", JSON: json})
+				descriptors[descIndex].Handler.Returns = append(
+					descriptors[descIndex].Handler.Returns,
+					Return{StatusCode: getHttpStatusCodeFromReturn(desc.Handler.RawReturns[i]), JSON: json})
 			} else if strings.Contains(desc.Handler.RawReturns[i], "(") {
 				tokens := strings.Split(desc.Handler.RawReturns[i], "(")
 				_, b := findDeclPath(packages, tokens[0])
