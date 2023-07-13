@@ -1069,22 +1069,21 @@ func fillHandler(descriptors []*Descriptor) {
 			log.Fatal(err)
 		}
 
-		for _, arg := range lastCallExpr.Args {
-			var argFound bool
-			ast.Inspect(f, func(n ast.Node) bool {
-				switch x := n.(type) {
-				case *ast.BasicLit:
-					if x.Pos() < arg.Pos() || argFound {
-						break
-					}
-
-					argFound = true
-					descriptors[0].Handler.URL = util.GetStringInBetween(x.Value, "\"", "\"")
+		arg := lastCallExpr.Args[0]
+		var argFound bool
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.BasicLit:
+				if x.Pos() < arg.Pos() || argFound {
+					break
 				}
 
-				return true
-			})
-		}
+				argFound = true
+				descriptors[0].Handler.URL = util.GetStringInBetween(x.Value, "\"", "\"")
+			}
+
+			return true
+		})
 
 		f, err = getFile(src, 0)
 		if err != nil {
