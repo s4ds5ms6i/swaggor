@@ -1,6 +1,7 @@
 package util
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -198,4 +199,18 @@ func GoTypeToSwagger(t string) string {
 	default:
 		return ""
 	}
+}
+
+func GetTypeByValue(value string) string {
+	if _, err := strconv.Atoi(value); err == nil {
+		return "int"
+	} else if _, err := strconv.ParseFloat(value, 64); err == nil {
+		return "float"
+	} else if (strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
+		(strings.HasPrefix(value, "`") && strings.HasSuffix(value, "`")) ||
+		(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+		return "string"
+	}
+
+	return ""
 }

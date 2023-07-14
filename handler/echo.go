@@ -278,7 +278,7 @@ paths:`)
 			swagger = fmt.Sprintf("%s%stype: object\n", swagger, indent(baseIndent))
 			swagger = fmt.Sprintf("%s%sproperties:\n", swagger, indent(baseIndent))
 
-			if ret.StatusCode == "200" {
+			if ret.StatusCode == "200" || ret.JSON != "" {
 				jsonString := []byte(ret.JSON)
 				var jsonMap map[string]interface{}
 				err := json.Unmarshal(jsonString, &jsonMap)
@@ -480,14 +480,23 @@ func getResponseFields(returnStatement string, handler Handler, packages map[str
 			for _, rl := range responseLines {
 				rlTokens := strings.Fields(rl)
 				if len(rlTokens) > 0 && rlTokens[0] == fmt.Sprintf("%s:", slTokens[0]) {
+					rlTokens[1] = strings.Join(rlTokens[1:], " ")
 					primitiveType, _ := util.IsPrimitiveType(slTokens[1])
+					t := slTokens[1]
+					typeFromVal := util.GetTypeByValue(rlTokens[1])
+					if typeFromVal != "" && t == "interface{}" {
+						t = typeFromVal
+						primitiveType = true
+					}
+
 					r = &Field{
 						Name:        slTokens[0],
-						Type:        slTokens[1],
+						Type:        t,
 						IsPrimitive: primitiveType,
 						Attr:        slTokens[2],
 						JSONName:    util.GetStringInBetween(slTokens[2], "json:\"", "\""),
-						RawVal:      strings.TrimRight(rlTokens[1], "{")}
+						RawVal:      strings.Trim(strings.TrimRight(rlTokens[1], "{"), `"`),
+					}
 				}
 			}
 
